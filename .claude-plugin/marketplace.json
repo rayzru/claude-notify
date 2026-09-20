@@ -1,0 +1,16 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "claude-notify",
+  "description": "Desktop notifications for Claude Code sessions in VS Code",
+  "owner": {
+    "name": "Andrew Rumm",
+    "url": "https://github.com/rayzru"
+  },
+  "plugins": [
+    {
+      "name": "claude-notify",
+      "source": "./",
+      "description": "Tells you when a Claude Code session finished and when one is waiting for you. Clicking the notification opens that session's tab in VS Code."
+    }
+  ]
+}

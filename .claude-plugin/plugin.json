@@ -1,0 +1,11 @@
+{
+  "name": "claude-notify",
+  "description": "Desktop notifications for Claude Code sessions in VS Code. Tells you when a session finished and when one is waiting for you; clicking the notification opens that session's tab.",
+  "version": "0.1.0",
+  "author": {
+    "name": "Andrew Rumm",
+    "url": "https://github.com/rayzru"
+  },
+  "homepage": "https://github.com/rayzru/claude-notify",
+  "keywords": ["notifications", "vscode", "sessions", "parallel"]
+}
