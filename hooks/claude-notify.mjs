@@ -266,13 +266,18 @@ function buildPlan(o) {
       const args = ['-title', o.title, '-message', o.message]
       if (o.sound) args.push('-sound', MAC_SOUNDS[o.soundKey] || 'default')
       if (o.group) args.push('-group', o.group)
-      if (o.uri) args.push('-open', o.uri)
-      let waits = false
-      if (o.style === 'alert') {
-        // -action forces alert style: the notification waits instead of fading
+      const waits = o.style === 'alert'
+      if (waits) {
+        // -action forces alert style: the notification waits instead of fading.
+        // Never add -open next to it. Both are click handlers: terminal-notifier
+        // reports the click and exits, the presenter opens the URI itself, and
+        // macOS separately tries to run -open through the bundle that just went
+        // away — "the application is not open anymore", or -609.
         args.push('-action', o.openLabel)
         if (o.waitTimeoutSeconds > 0) args.push('-timeout', String(o.waitTimeoutSeconds))
-        waits = true
+      } else if (o.uri) {
+        // nothing waits for a banner, so the bundle handles the click on its own
+        args.push('-open', o.uri)
       }
       return { cmd: notifier, args, waits }
     }
