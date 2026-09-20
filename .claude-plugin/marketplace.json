@@ -1,7 +1,7 @@
 {
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
-  "name": "claude-notify",
-  "description": "Desktop notifications for Claude Code sessions in VS Code",
+  "name": "rayzru",
+  "description": "Andrew Rumm's Claude Code plugins",
   "owner": {
     "name": "Andrew Rumm",
     "url": "https://github.com/rayzru"

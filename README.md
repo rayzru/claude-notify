@@ -24,8 +24,11 @@ dry-run tests only — nobody has run them. Treat them as a starting point, not 
 
 ```
 /plugin marketplace add rayzru/claude-notify
-/plugin install claude-notify@claude-notify
+/plugin install claude-notify@rayzru
 ```
+
+The marketplace is named after its owner, so the plugin reads `claude-notify@rayzru`. If
+more plugins follow, they can be listed from the same marketplace manifest.
 
 Hooks are read when a session starts, so open a new session. Then:
 
