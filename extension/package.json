@@ -1,0 +1,63 @@
+{
+  "name": "claude-notify",
+  "displayName": "Claude Notify",
+  "description": "Tells you when a Claude Code session finished and when one is waiting for you. Clicking the notification brings that session's tab to the front.",
+  "version": "0.1.0",
+  "publisher": "PUBLISHER_ID_PENDING",
+  "license": "MIT",
+  "engines": { "vscode": "^1.90.0" },
+  "categories": ["Other"],
+  "keywords": ["claude", "claude code", "notifications", "sessions"],
+  "repository": { "type": "git", "url": "https://github.com/rayzru/claude-notify.git" },
+  "main": "./dist/extension.js",
+  "activationEvents": ["onStartupFinished"],
+  "contributes": {
+    "commands": [
+      { "command": "claudeNotify.test", "title": "Claude Notify: Send a test notification" },
+      { "command": "claudeNotify.doctor", "title": "Claude Notify: Check that notifications work" },
+      { "command": "claudeNotify.toggle", "title": "Claude Notify: Turn notifications on or off" }
+    ],
+    "configuration": {
+      "title": "Claude Notify",
+      "properties": {
+        "claudeNotify.enabled": {
+          "type": "boolean", "default": true,
+          "description": "Announce sessions that finish or start waiting for you."
+        },
+        "claudeNotify.minTurnSeconds": {
+          "type": "number", "default": 45,
+          "description": "A turn shorter than this finishes quietly — you were watching it. 0 announces every turn."
+        },
+        "claudeNotify.events": {
+          "type": "array", "default": ["done", "error", "waitingInput"],
+          "items": { "type": "string", "enum": ["done", "error", "waitingInput"] },
+          "description": "Which events are worth a notification."
+        },
+        "claudeNotify.style": {
+          "type": "string", "default": "alert", "enum": ["alert", "banner"],
+          "enumDescriptions": ["Stays until you answer it", "Fades out on its own"],
+          "description": "How long a notification stays on screen."
+        },
+        "claudeNotify.sound": {
+          "type": "boolean", "default": true,
+          "description": "Play a sound with the notification."
+        },
+        "claudeNotify.statusBar": {
+          "type": "boolean", "default": true,
+          "description": "Show running and waiting sessions in the status bar."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "node esbuild.mjs",
+    "watch": "node esbuild.mjs --watch",
+    "package": "npx @vscode/vsce package --no-dependencies"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/vscode": "^1.90.0",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.6.0"
+  }
+}
