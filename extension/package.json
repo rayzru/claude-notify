@@ -38,6 +38,14 @@
       {
         "command": "claudeNotify.toggle",
         "title": "Claude Notify: Turn notifications on or off"
+      },
+      {
+        "command": "claudeNotify.addHooks",
+        "title": "Claude Notify: Add hooks to Claude Code settings"
+      },
+      {
+        "command": "claudeNotify.removeHooks",
+        "title": "Claude Notify: Remove hooks from Claude Code settings"
       }
     ],
     "configuration": {
@@ -99,7 +107,10 @@
   "scripts": {
     "build": "node esbuild.mjs",
     "watch": "node esbuild.mjs --watch",
-    "package": "npx @vscode/vsce package --no-dependencies"
+    "package": "npx @vscode/vsce package --no-dependencies",
+    "vscode:prepublish": "npm run build",
+    "vscode:uninstall": "node ./dist/uninstall.js",
+    "test": "esbuild src/wiring.ts --bundle --platform=node --format=esm --outfile=test/.build/wiring.mjs --log-level=warning && node test/wiring.test.mjs && node test/link.test.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

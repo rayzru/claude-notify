@@ -1,10 +1,13 @@
 import { spawn } from 'node:child_process'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import * as vscode from 'vscode'
+import {
+  editorLinkPath, hooksWired, installScript, pluginInstalled, unwireHooks, wireHooks, writeConfig,
+} from './wiring'
 
 /**
  * The notifier runs outside the editor — it is a hook, spawned per event, and macOS
@@ -15,7 +18,9 @@ import * as vscode from 'vscode'
  * external links with a confirmation prompt, and until it is answered a click only
  * raises the window, which looks exactly like a link pointing at the wrong session.
  */
-const STATE_FILE = join(homedir(), '.claude', 'claude-notify-vscode.json')
+const HOME = homedir()
+const STATE_FILE = editorLinkPath(HOME)
+const DECLINED_KEY = 'claudeNotify.hooksDeclined'
 const CLAUDE_EXTENSION_OPEN = 'claude-vscode.primaryEditor.open'
 
 type SessionState = 'running' | 'waiting'
@@ -129,6 +134,56 @@ function startServer(token: string): Promise<number> {
   })
 }
 
+function syncConfig(): void {
+  const cfg = vscode.workspace.getConfiguration('claudeNotify')
+  try {
+    writeConfig(HOME, {
+      enabled: cfg.get<boolean>('enabled', true),
+      minTurnSeconds: cfg.get<number>('minTurnSeconds', 45),
+      events: cfg.get<string[]>('events', ['done', 'error', 'waitingInput']),
+      style: cfg.get<string>('style', 'alert'),
+      sound: cfg.get<boolean>('sound', true),
+    })
+  } catch (err) {
+    log(`could not write the notifier config: ${String(err)}`)
+  }
+}
+
+/**
+ * Claude Code only tells anyone about a session through hooks in its settings file,
+ * so without them this extension hears nothing. That file is the user's, though:
+ * ask once, and remember a "not now" instead of asking on every start.
+ */
+async function offerHooks(context: vscode.ExtensionContext, force = false): Promise<void> {
+  if (pluginInstalled(HOME)) {
+    log('the claude-notify Claude Code plugin is installed and brings its own hooks — leaving settings.json alone')
+    if (force) vscode.window.showInformationMessage('Claude Notify: the Claude Code plugin already provides the hooks, nothing to add.')
+    return
+  }
+  if (hooksWired(HOME)) {
+    if (force) vscode.window.showInformationMessage('Claude Notify: hooks are already in place.')
+    return
+  }
+  if (!force && context.globalState.get<boolean>(DECLINED_KEY)) return
+
+  const add = 'Add hooks'
+  const answer = await vscode.window.showInformationMessage(
+    'Claude Notify needs four hooks in ~/.claude/settings.json to hear when a Claude Code session finishes or waits for you. Add them? Nothing else in the file changes.',
+    add, 'Not now')
+  if (answer !== add) {
+    await context.globalState.update(DECLINED_KEY, true)
+    log('hooks declined — run "Claude Notify: Add hooks" to add them later')
+    return
+  }
+  try {
+    wireHooks(HOME)
+    await context.globalState.update(DECLINED_KEY, false)
+    vscode.window.showInformationMessage('Claude Notify: hooks added. Sessions started from now on will report.')
+  } catch (err) {
+    vscode.window.showErrorMessage(`Claude Notify could not update ~/.claude/settings.json: ${String(err)}`)
+  }
+}
+
 function runNotifier(context: vscode.ExtensionContext, args: string[]): Promise<string> {
   const script = context.asAbsolutePath(join('dist', 'claude-notify.mjs'))
   return new Promise((resolve) => {
@@ -146,6 +201,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100)
   statusBar.command = 'claudeNotify.doctor'
   context.subscriptions.push(output, statusBar)
+
+  try {
+    if (installScript(context.asAbsolutePath(join('dist', 'claude-notify.mjs')), HOME)) log('notifier script updated')
+  } catch (err) {
+    log(`could not install the notifier script: ${String(err)}`)
+  }
+  syncConfig()
 
   const token = randomBytes(24).toString('hex')
   try {
@@ -174,14 +236,29 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       await cfg.update('enabled', next, vscode.ConfigurationTarget.Global)
       vscode.window.showInformationMessage(`Claude Notify is ${next ? 'on' : 'off'}.`)
     }),
+    vscode.commands.registerCommand('claudeNotify.addHooks', () => offerHooks(context, true)),
+    vscode.commands.registerCommand('claudeNotify.removeHooks', () => {
+      const removed = unwireHooks(HOME)
+      vscode.window.showInformationMessage(removed
+        ? `Claude Notify: removed ${removed} hook${removed > 1 ? 's' : ''} from ~/.claude/settings.json.`
+        : 'Claude Notify: no hooks of ours to remove.')
+    }),
     vscode.workspace.onDidChangeConfiguration((e) => {
-      if (e.affectsConfiguration('claudeNotify')) refreshStatusBar()
+      if (!e.affectsConfiguration('claudeNotify')) return
+      syncConfig()
+      refreshStatusBar()
     }),
   )
+
+  void offerHooks(context)
 }
 
 export function deactivate(): void {
   server?.close()
-  // Leaving the file behind would point hooks at a port nobody is listening on.
-  try { rmSync(STATE_FILE, { force: true }) } catch {}
+  // Leaving the file behind would point hooks at a port nobody is listening on — but
+  // with two windows open the file may belong to the other one, which is still alive.
+  try {
+    const link = JSON.parse(readFileSync(STATE_FILE, 'utf8'))
+    if (link.pid === process.pid) rmSync(STATE_FILE, { force: true })
+  } catch {}
 }

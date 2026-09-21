@@ -3,9 +3,9 @@ import { copyFileSync, mkdirSync } from 'node:fs'
 
 const watch = process.argv.includes('--watch')
 const options = {
-  entryPoints: ['src/extension.ts'],
+  entryPoints: ['src/extension.ts', 'src/uninstall.ts'],
   bundle: true,
-  outfile: 'dist/extension.js',
+  outdir: 'dist',
   platform: 'node',
   target: 'node18',
   format: 'cjs',
@@ -24,5 +24,5 @@ if (watch) {
   console.log('watching')
 } else {
   await build(options)
-  console.log('built dist/extension.js')
+  console.log('built dist/')
 }

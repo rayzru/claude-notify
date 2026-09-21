@@ -26,6 +26,7 @@
  */
 
 import { spawn, spawnSync } from 'node:child_process'
+import { request } from 'node:http'
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { basename, join } from 'node:path'
@@ -33,6 +34,8 @@ import { fileURLToPath } from 'node:url'
 
 const SELF = fileURLToPath(import.meta.url)
 const STATE_DIR = join(tmpdir(), 'claude-notify')
+// Written by the VS Code extension while it listens; absent when it is not installed.
+const EDITOR_LINK = join(homedir(), '.claude', 'claude-notify-vscode.json')
 const CONFIG_PATH = process.env.CLAUDE_NOTIFY_CONFIG || join(homedir(), '.claude', 'claude-notify.config.json')
 const RESOLVED_WITHOUT_CLICK = new Set(['@TIMEOUT', '@CLOSED', ''])
 const MAC_SOUNDS = { done: 'Glass', waiting: 'Ping', error: 'Basso' }
@@ -214,6 +217,66 @@ function sweepStale(hours) {
   }
 }
 
+/* ------------------------------------------------------------- editor link */
+
+/** The extension's loopback listener, if one is running right now. */
+function editorLink() {
+  const link = readJsonFile(EDITOR_LINK)
+  if (!link || !Number.isInteger(link.port) || typeof link.token !== 'string') return null
+  if (link.pid) {
+    try { process.kill(link.pid, 0) } catch { return null } // left behind by a crashed editor
+  }
+  return link
+}
+
+/** Resolves true only when the extension answered and said it did the thing. */
+function postToEditor(link, path, body, timeoutMs) {
+  return new Promise((resolve) => {
+    let settled = false
+    const finish = (value) => { if (!settled) { settled = true; resolve(value) } }
+    try {
+      const payload = JSON.stringify(body)
+      const req = request({
+        host: '127.0.0.1',
+        port: link.port,
+        path,
+        method: 'POST',
+        timeout: timeoutMs,
+        headers: {
+          'content-type': 'application/json',
+          'content-length': Buffer.byteLength(payload),
+          'x-claude-notify-token': link.token,
+        },
+      }, (res) => {
+        let raw = ''
+        res.on('data', (chunk) => { raw += chunk })
+        res.on('end', () => {
+          if (res.statusCode !== 200) return finish(false)
+          try { finish(JSON.parse(raw).ok === true) } catch { finish(false) }
+        })
+      })
+      req.on('timeout', () => { req.destroy(); finish(false) })
+      req.on('error', () => finish(false))
+      req.end(payload)
+    } catch {
+      finish(false)
+    }
+  })
+}
+
+/**
+ * Prefer the extension: it focuses the tab through the Claude Code extension's own
+ * command, which VS Code does not guard. A vscode:// link is guarded — the first
+ * click only raises a confirmation prompt. So the link is the fallback, not the path.
+ */
+async function focusOrOpen(o) {
+  const link = editorLink()
+  if (link && UUID.test(String(o.sessionId))) {
+    if (await postToEditor(link, '/focus', { session: o.sessionId }, 1500)) return
+  }
+  if (o.uri) openUri(o.uri)
+}
+
 /* ----------------------------------------------------------- notification */
 
 function findTerminalNotifier() {
@@ -366,7 +429,7 @@ function present(o) {
       return
     }
     const answer = out.trim()
-    if (o.uri && !RESOLVED_WITHOUT_CLICK.has(answer)) openUri(o.uri)
+    if (o.uri && !RESOLVED_WITHOUT_CLICK.has(answer)) focusOrOpen(o)
   })
 }
 
@@ -415,6 +478,7 @@ function compose(cfg, lang, { sessionId, lane, message, soundKey }) {
     waitTimeoutSeconds: cfg.waitTimeoutSeconds,
     group,
     uri,
+    sessionId,
   }
 }
 
@@ -424,12 +488,21 @@ function notify(cfg, payload) {
   spawnPresenter(compose(cfg, resolveLanguage(cfg), payload))
 }
 
-function hookMode() {
+async function hookMode() {
   const cfg = loadConfig()
-  if (!cfg.enabled) return
   const data = readStdinJson()
   const event = data.hook_event_name || ''
   const sessionId = data.session_id || ''
+
+  // The status bar counts sessions whether or not notifications are on, so the
+  // extension hears every main-agent event before any of the early returns below.
+  const link = data.agent_id ? null : editorLink()
+  if (link) {
+    const lane = basename(String(data.cwd || process.cwd()).replace(/[/\\]+$/, '')) || 'claude'
+    await postToEditor(link, '/event', { event, session: sessionId, lane }, 400)
+  }
+
+  if (!cfg.enabled) return
 
   if (event === 'UserPromptSubmit') {
     writeState(turnPath(sessionId), Date.now())
@@ -532,7 +605,7 @@ function main() {
     }))
     return
   }
-  hookMode()
+  return hookMode()
 }
 
 /* ------------------------------------------------------------------ doctor */
@@ -632,8 +705,12 @@ function doctor() {
 
   if (!runsInEditor()) {
     warn('not running under the VS Code extension — notifications still fire, but there is no tab to click through to')
+  } else if (editorLink()) {
+    ok(`running under the editor (${process.env.CLAUDE_CODE_ENTRYPOINT || 'vscode'})`)
+    ok('Claude Notify extension is listening — clicks go straight to the tab, no VS Code prompt')
   } else {
     ok(`running under the editor (${process.env.CLAUDE_CODE_ENTRYPOINT || 'vscode'})`)
+    say('    ', 'Claude Notify extension not running — clicks use vscode:// links instead')
     const trusted = editorTrustsLink(cfg.extensionId)
     if (trusted === false) warn(`VS Code has not been told to trust links to ${cfg.extensionId} — the first click shows a confirmation prompt; answer it once`)
     else if (trusted === null) say('    ', `could not read VS Code's trusted-link list (sqlite3 unavailable or no state db)`)
@@ -659,8 +736,5 @@ function doctor() {
   console.log(problems === 0 ? '\nAll good.' : `\n${problems} thing(s) to look at.`)
 }
 
-try {
-  main()
-} catch {
-  // a notifier must never break the session it reports on
-}
+// a notifier must never break the session it reports on
+Promise.resolve().then(main).catch(() => {})
