@@ -21,6 +21,8 @@ export const legacyLinkPath = (home: string) => join(claudeDir(home), 'claude-no
 /** One file per VS Code window, so several windows do not overwrite each other. */
 export const linksDir = (home: string) => join(claudeDir(home), 'claude-notify', 'links')
 export const linkPath = (home: string, pid: number) => join(linksDir(home), `${pid}.json`)
+/** One file per active session, written by the notifier; every window reads the same set. */
+export const sessionsDir = (home: string) => join(claudeDir(home), 'claude-notify', 'sessions')
 export const configPath = (home: string) => join(claudeDir(home), 'claude-notify.config.json')
 
 const hookCommand = (home: string) => `node "${stableScriptPath(home)}"`

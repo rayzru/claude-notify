@@ -7,7 +7,8 @@ First release.
 - Notifies when a Claude Code session finishes and when one is waiting for you.
 - Clicking the notification brings that session's tab to the front, without VS Code's
   prompt for external links.
-- Running and waiting sessions in the status bar; clicking it goes to the waiting one.
+- Every active session from every window in the status bar; click for the list — who,
+  where, in what state, which model and how much context — and pick one to go there.
 - Adds its hooks to `~/.claude/settings.json` only after asking, and removes them on
   uninstall.
 - Works with several VS Code windows open: each session is routed to the window whose

@@ -47,6 +47,10 @@ function debug(line) {
 
 // One file per VS Code window running the extension; empty when it is not installed.
 const LINKS_DIR = join(homedir(), '.claude', 'claude-notify', 'links')
+// One file per active session, shared by every window: who, where, in what state.
+const SESSIONS_DIR = join(homedir(), '.claude', 'claude-notify', 'sessions')
+// A session closed mid-turn never sends Stop; after this long without an event it is gone.
+const SESSION_TTL_MS = 3 * 3600_000
 const CONFIG_PATH = process.env.CLAUDE_NOTIFY_CONFIG || join(homedir(), '.claude', 'claude-notify.config.json')
 const RESOLVED_WITHOUT_CLICK = new Set(['@TIMEOUT', '@CLOSED', ''])
 const MAC_SOUNDS = { done: 'Glass', waiting: 'Ping', error: 'Basso' }
@@ -185,7 +189,7 @@ const pidPath = (group) => join(STATE_DIR, `pid-${safeId(group)}`)
 
 function writeState(path, body) {
   try {
-    mkdirSync(STATE_DIR, { recursive: true })
+    mkdirSync(dirname(path), { recursive: true })
     writeFileSync(path, String(body))
   } catch {}
 }
@@ -333,7 +337,10 @@ async function focusOrOpen(o) {
     raiseWindow(link)
     const ok = await postToEditor(link, '/focus', { session: o.sessionId }, 1500)
     debug(`focus session=${o.sessionId} window=${link.pid} ok=${ok}`)
-    if (ok) return
+    if (ok) {
+      markSeen(o.sessionId)
+      return
+    }
   }
   if (o.uri) openUri(o.uri)
 }
@@ -537,6 +544,58 @@ function spawnPresenter(o) {
   }
 }
 
+/* --------------------------------------------------------- session registry */
+
+const sessionPath = (id) => join(SESSIONS_DIR, `${safeId(id)}.json`)
+
+/**
+ * Every window's status bar lists every active session, so the list lives on disk
+ * rather than in one window's memory — it also survives a window reload that way.
+ * Only the state goes here; title and context size are read fresh from the
+ * transcript when someone looks, since they change on every turn.
+ */
+function recordSession(event, data) {
+  const id = data.session_id
+  if (!id || !UUID.test(String(id))) return
+  const path = sessionPath(id)
+  if (event === 'Stop' || event === 'StopFailure') {
+    try { unlinkSync(path) } catch {}
+    return
+  }
+  if (event !== 'UserPromptSubmit' && event !== 'Notification') return
+  const cwd = String(data.cwd || '')
+  writeState(path, JSON.stringify({
+    session: id,
+    state: event === 'Notification' ? 'waiting' : 'running',
+    message: event === 'Notification' ? String(data.message || '') : '',
+    cwd,
+    project: basename(cwd.replace(/[/\\]+$/, '')) || cwd,
+    transcript: String(data.transcript_path || ''),
+    at: Date.now(),
+  }))
+}
+
+function pruneSessions() {
+  let names = []
+  try { names = readdirSync(SESSIONS_DIR) } catch { return }
+  const cutoff = Date.now() - SESSION_TTL_MS
+  for (const name of names) {
+    const path = join(SESSIONS_DIR, name)
+    const entry = readJsonFile(path)
+    if (!entry || !(entry.at > cutoff)) {
+      try { unlinkSync(path) } catch {}
+    }
+  }
+}
+
+/** The user went to a waiting session: it no longer needs to call for attention. */
+function markSeen(sessionId) {
+  const path = sessionPath(sessionId)
+  const entry = readJsonFile(path)
+  if (!entry || entry.state !== 'waiting') return
+  writeState(path, JSON.stringify({ ...entry, state: 'running', message: '', at: Date.now() }))
+}
+
 /* ------------------------------------------------------------- hook logic */
 
 function readStdinJson() {
@@ -586,14 +645,13 @@ async function hookMode() {
   const event = data.hook_event_name || ''
   const sessionId = data.session_id || ''
 
-  // The status bar counts sessions whether or not notifications are on, so the
-  // extension hears every main-agent event before any of the early returns below.
+  // The session list counts sessions whether or not notifications are on, so the
+  // registry hears every main-agent event before any of the early returns below.
   if (cfg.debug) debugOn = true
   debug(`hook ${event} session=${sessionId} subagent=${Boolean(data.agent_id)} ppid=${process.ppid}`)
-  const link = data.agent_id ? null : ownerLink(data.cwd)
-  if (link) {
-    const lane = basename(String(data.cwd || process.cwd()).replace(/[/\\]+$/, '')) || 'claude'
-    await postToEditor(link, '/event', { event, session: sessionId, lane }, 400)
+  if (!data.agent_id) {
+    recordSession(event, data)
+    pruneSessions()
   }
 
   if (!cfg.enabled) return
@@ -683,6 +741,17 @@ function main() {
     const res = spawnSync(notifier, ['-list', 'ALL'], { encoding: 'utf8' })
     process.stdout.write(res.stdout || '')
     return
+  }
+  if (mode === '--focus') {
+    // The status bar list: go to a session, raising whichever window owns it.
+    const cfg = loadConfig()
+    if (cfg.debug) debugOn = true
+    const entry = readJsonFile(sessionPath(arg)) || {}
+    return focusOrOpen({
+      sessionId: arg,
+      cwd: entry.cwd || '',
+      uri: UUID.test(String(arg)) ? `${cfg.uriScheme}://${cfg.extensionId}/open?session=${arg}` : '',
+    })
   }
   if (mode === '--doctor') {
     doctor()

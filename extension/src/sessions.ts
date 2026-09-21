@@ -1,0 +1,142 @@
+import { closeSync, existsSync, fstatSync, openSync, readdirSync, readFileSync, readSync, unlinkSync } from 'node:fs'
+import { basename, join } from 'node:path'
+
+/**
+ * The session list, read from the files the notifier writes. No vscode API here, so it
+ * can be tested with plain Node.
+ */
+
+export type SessionState = 'running' | 'waiting'
+
+export interface Session {
+  session: string
+  state: SessionState
+  message: string
+  cwd: string
+  project: string
+  transcript: string
+  at: number
+}
+
+export interface Details {
+  title: string
+  model: string
+  contextTokens: number
+}
+
+export const SESSION_TTL_MS = 3 * 3600_000
+
+function readJson(path: string): any {
+  try { return JSON.parse(readFileSync(path, 'utf8')) } catch { return null }
+}
+
+/** Active sessions, stale ones removed on the way: a session closed mid-turn never sends Stop. */
+export function readSessions(dir: string, now = Date.now()): Session[] {
+  let names: string[] = []
+  try { names = readdirSync(dir) } catch { return [] }
+  const out: Session[] = []
+  for (const name of names) {
+    if (!name.endsWith('.json')) continue
+    const path = join(dir, name)
+    const s = readJson(path)
+    if (!s || !s.session || !(s.at > now - SESSION_TTL_MS)) {
+      try { unlinkSync(path) } catch {}
+      continue
+    }
+    if (s.state !== 'waiting' && s.state !== 'running') continue
+    out.push(s)
+  }
+  // Waiting first, longest-waiting on top; then running, most recent on top.
+  return out.sort((a, b) => {
+    if (a.state !== b.state) return a.state === 'waiting' ? -1 : 1
+    return a.state === 'waiting' ? a.at - b.at : b.at - a.at
+  })
+}
+
+function readTail(path: string, bytes: number): string {
+  let fd: number | undefined
+  try {
+    fd = openSync(path, 'r')
+    const size = fstatSync(fd).size
+    const length = Math.min(bytes, size)
+    const buf = Buffer.alloc(length)
+    readSync(fd, buf, 0, length, size - length)
+    return buf.toString('utf8')
+  } catch {
+    return ''
+  } finally {
+    if (fd !== undefined) try { closeSync(fd) } catch {}
+  }
+}
+
+/**
+ * Claude Code appends the session's title and each reply's token usage to the
+ * transcript, so the freshest of both sit in its last lines — reading the tail is enough,
+ * even when the whole file runs to megabytes.
+ */
+export function readDetails(transcript: string): Details {
+  const details: Details = { title: '', model: '', contextTokens: 0 }
+  if (!transcript || !existsSync(transcript)) return details
+  const lines = readTail(transcript, 128 * 1024).split('\n').slice(1) // first one is cut
+  for (const line of lines) {
+    if (!line.includes('"ai-title"') && !line.includes('"usage"')) continue
+    let d: any
+    try { d = JSON.parse(line) } catch { continue }
+    if (d.type === 'ai-title' && d.aiTitle) details.title = String(d.aiTitle)
+    const usage = d.type === 'assistant' ? d.message?.usage : undefined
+    if (usage) {
+      // what the model had in front of it on that turn: new input plus the cached context
+      details.contextTokens = (usage.input_tokens || 0) + (usage.cache_read_input_tokens || 0) + (usage.cache_creation_input_tokens || 0)
+      details.model = String(d.message.model || '')
+    }
+  }
+  return details
+}
+
+/** claude-opus-5 → Opus 5, claude-haiku-4-5-20251001 → Haiku 4.5 */
+export function modelName(id: string): string {
+  const parts = id.replace(/^claude-/, '').replace(/-\d{8}$/, '').replace(/\[.*\]$/, '').split('-')
+  if (!parts[0]) return ''
+  return `${parts[0][0].toUpperCase()}${parts[0].slice(1)} ${parts.slice(1).join('.')}`.trim()
+}
+
+export function tokens(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
+  if (n >= 1000) return `${Math.round(n / 1000)}K`
+  return String(n)
+}
+
+export function ago(at: number, now = Date.now()): string {
+  const minutes = Math.floor((now - at) / 60_000)
+  if (minutes < 1) return 'just now'
+  if (minutes < 60) return `${minutes} min`
+  return `${Math.floor(minutes / 60)} h ${minutes % 60} min`
+}
+
+interface Link { pid: number; folders?: string[]; workspaceFile?: string }
+
+/** Same rule as the notifier: the window whose workspace holds the session's folder. */
+export function ownerOf(cwd: string, linksDir: string): Link | null {
+  let names: string[] = []
+  try { names = readdirSync(linksDir) } catch { return null }
+  const dir = cwd.replace(/[/\\]+$/, '')
+  let best: Link | null = null
+  let bestLength = -1
+  for (const name of names) {
+    const link: Link | null = readJson(join(linksDir, name))
+    if (!link) continue
+    for (const folder of link.folders || []) {
+      const root = folder.replace(/[/\\]+$/, '')
+      if ((dir === root || dir.startsWith(root + '/')) && root.length > bestLength) {
+        best = link
+        bestLength = root.length
+      }
+    }
+  }
+  return best
+}
+
+export function windowName(link: Link): string {
+  const target = link.workspaceFile || (link.folders || [])[0] || ''
+  return basename(target).replace(/\.code-workspace$/, '')
+}

@@ -1,36 +1,41 @@
 import { spawn } from 'node:child_process'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, rmSync, watch, writeFileSync, type FSWatcher } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import * as vscode from 'vscode'
 import {
-  hooksWired, installScript, legacyLinkPath, linkPath, linksDir, pluginInstalled, unwireHooks, wireHooks, writeConfig,
+  hooksWired, installScript, legacyLinkPath, linkPath, linksDir, pluginInstalled, sessionsDir,
+  unwireHooks, wireHooks, writeConfig,
 } from './wiring'
+import { ago, modelName, ownerOf, readDetails, readSessions, tokens, windowName, type Session } from './sessions'
 
 /**
  * The notifier runs outside the editor — it is a hook, spawned per event, and macOS
- * notifications cannot come from an extension at all. So the two halves talk over a
- * loopback socket whose port and token are written where the hook can read them.
+ * notifications cannot come from an extension at all. So the halves meet on disk and
+ * over a loopback socket:
  *
- * Going through this socket instead of a `vscode://` link matters: VS Code guards
- * external links with a confirmation prompt, and until it is answered a click only
- * raises the window, which looks exactly like a link pointing at the wrong session.
+ * - the notifier keeps one file per active session in ~/.claude/claude-notify/sessions,
+ *   which every window reads for its status bar;
+ * - each window writes a link file with its port, token and folders, so a click can be
+ *   routed to the window that owns the session.
+ *
+ * Going through the socket instead of a `vscode://` link matters: VS Code guards external
+ * links with a confirmation prompt, and until it is answered a click only raises the
+ * window, which looks exactly like a link pointing at the wrong session.
  */
 const HOME = homedir()
 const LINK_FILE = linkPath(HOME, process.pid)
-const SESSION_TTL_MS = 3 * 3600_000
+const SESSIONS = sessionsDir(HOME)
 const DECLINED_KEY = 'claudeNotify.hooksDeclined'
 const CLAUDE_EXTENSION_OPEN = 'claude-vscode.primaryEditor.open'
-
-type SessionState = 'running' | 'waiting'
-
-const sessions = new Map<string, { state: SessionState; lane: string; at: number }>()
 
 let server: Server | undefined
 let statusBar: vscode.StatusBarItem | undefined
 let output: vscode.OutputChannel | undefined
+let watcher: FSWatcher | undefined
+let linkInfo: { port: number; token: string } | undefined
 
 function log(line: string): void {
   output?.appendLine(`${new Date().toISOString().slice(11, 19)}  ${line}`)
@@ -41,7 +46,7 @@ function readBody(req: IncomingMessage): Promise<any> {
     let raw = ''
     req.on('data', (chunk) => {
       raw += chunk
-      if (raw.length > 64_000) req.destroy() // a hook payload is never this big
+      if (raw.length > 64_000) req.destroy() // a request from the notifier is never this big
     })
     req.on('end', () => {
       try { resolve(JSON.parse(raw || '{}')) } catch { resolve({}) }
@@ -50,42 +55,81 @@ function readBody(req: IncomingMessage): Promise<any> {
   })
 }
 
-/** A session closed while running or waiting never sends Stop; do not count it forever. */
-function pruneSessions(): void {
-  const cutoff = Date.now() - SESSION_TTL_MS
-  for (const [id, s] of sessions) if (s.at < cutoff) sessions.delete(id)
-}
+/* ------------------------------------------------------------- status bar */
 
 function refreshStatusBar(): void {
   if (!statusBar) return
-  pruneSessions()
   if (!vscode.workspace.getConfiguration('claudeNotify').get<boolean>('statusBar', true)) {
     statusBar.hide()
     return
   }
-  let running = 0
-  let waiting = 0
-  for (const { state } of sessions.values()) state === 'waiting' ? (waiting += 1) : (running += 1)
-
-  if (running === 0 && waiting === 0) {
+  const all = readSessions(SESSIONS)
+  const waiting = all.filter((s) => s.state === 'waiting').length
+  const running = all.length - waiting
+  if (!all.length) {
     statusBar.hide()
     return
   }
-  statusBar.text = waiting > 0 ? `$(bell-dot) ${waiting} waiting` : `$(sync~spin) ${running} running`
-  statusBar.tooltip = [
-    running ? `${running} session${running > 1 ? 's' : ''} running` : '',
-    waiting ? `${waiting} waiting for you` : '',
-  ].filter(Boolean).join(' · ')
+  statusBar.text = waiting > 0
+    ? `$(bell-dot) ${waiting} waiting${running ? ` · ${running} running` : ''}`
+    : `$(sync~spin) ${running} running`
+  statusBar.tooltip = 'Claude Code sessions in every window — click for the list'
   statusBar.show()
 }
 
-/** A session the user has answered is no longer waiting, whoever told us. */
-function markSession(sessionId: string, state: SessionState | 'idle', lane: string): void {
-  if (!sessionId) return
-  if (state === 'idle') sessions.delete(sessionId)
-  else sessions.set(sessionId, { state, lane, at: Date.now() })
+/** The window a session lives in, as the list shows it. */
+function whereLabel(s: Session): string {
+  const owner = ownerOf(s.cwd, linksDir(HOME))
+  if (!owner) return 'no open window'
+  if (owner.pid === process.pid) return 'this window'
+  return `window: ${windowName(owner)}`
+}
+
+/** Every active session: who, where, in what state, how full its context is. */
+async function showSessions(context: vscode.ExtensionContext): Promise<void> {
+  const all = readSessions(SESSIONS)
+  if (!all.length) {
+    vscode.window.showInformationMessage('Claude Notify: no Claude Code sessions running or waiting.')
+    return
+  }
+  const items = all.map((s) => {
+    const d = readDetails(s.transcript)
+    const facts = [
+      d.model && modelName(d.model),
+      d.contextTokens ? `context ${tokens(d.contextTokens)}` : '',
+    ].filter(Boolean).join(' · ')
+    return {
+      label: `${s.state === 'waiting' ? '$(bell-dot)' : '$(sync~spin)'} ${d.title || s.project}`,
+      description: `${s.state === 'waiting' ? 'waiting for you' : 'running'} ${ago(s.at)} · ${s.project} · ${whereLabel(s)}`,
+      detail: s.state === 'waiting' && s.message ? `${s.message}${facts ? ` — ${facts}` : ''}` : facts,
+      id: s.session,
+    }
+  })
+  const pick = await vscode.window.showQuickPick(items, {
+    placeHolder: 'Claude Code sessions in every window — pick one to go there',
+    matchOnDescription: true,
+    matchOnDetail: true,
+  })
+  if (!pick) return
+  // The notifier routes it: raises the owning window, then asks that window to focus it.
+  await runNotifier(context, ['--focus', pick.id])
   refreshStatusBar()
 }
+
+function watchSessions(): void {
+  try {
+    mkdirSync(SESSIONS, { recursive: true })
+    let pending: NodeJS.Timeout | undefined
+    watcher = watch(SESSIONS, () => {
+      if (pending) clearTimeout(pending)
+      pending = setTimeout(refreshStatusBar, 200)
+    })
+  } catch (err) {
+    log(`could not watch the session list, falling back to polling: ${String(err)}`)
+  }
+}
+
+/* ------------------------------------------------------------- the socket */
 
 async function focusSession(sessionId: string): Promise<boolean> {
   try {
@@ -99,42 +143,6 @@ async function focusSession(sessionId: string): Promise<boolean> {
   }
 }
 
-/** The user went to it, so it no longer needs to call for attention. A running one stays counted. */
-async function openSession(sessionId: string): Promise<boolean> {
-  const ok = await focusSession(sessionId)
-  if (ok && sessions.get(sessionId)?.state === 'waiting') markSession(sessionId, 'idle', '')
-  return ok
-}
-
-function ago(at: number): string {
-  const minutes = Math.round((Date.now() - at) / 60_000)
-  return minutes < 1 ? 'just now' : `${minutes} min ago`
-}
-
-/**
- * The status bar says "2 waiting"; clicking it should take you there, not open a report.
- * One waiting session: go straight to it. Several, or only running ones: pick.
- */
-async function showSessions(): Promise<void> {
-  const all = [...sessions.entries()]
-  const waiting = all.filter(([, s]) => s.state === 'waiting')
-  if (waiting.length === 1) {
-    await openSession(waiting[0][0])
-    return
-  }
-  if (!all.length) {
-    vscode.window.showInformationMessage('Claude Notify: no sessions running or waiting.')
-    return
-  }
-  const ordered = [...waiting, ...all.filter(([, s]) => s.state !== 'waiting')]
-  const pick = await vscode.window.showQuickPick(ordered.map(([id, s]) => ({
-    label: `${s.state === 'waiting' ? '$(bell-dot)' : '$(sync)'} ${s.lane || 'session'}`,
-    description: `${s.state} · ${ago(s.at)}`,
-    id,
-  })), { placeHolder: 'Go to a Claude Code session' })
-  if (pick) await openSession(pick.id)
-}
-
 function startServer(token: string): Promise<number> {
   return new Promise((resolve, reject) => {
     const srv = createServer(async (req: IncomingMessage, res: ServerResponse) => {
@@ -143,28 +151,14 @@ function startServer(token: string): Promise<number> {
         return
       }
       const body = await readBody(req)
-      const reply = (payload: object) => {
-        res.writeHead(200, { 'content-type': 'application/json' })
-        res.end(JSON.stringify(payload))
-      }
-
       if (req.url === '/focus') {
-        reply({ ok: await openSession(String(body.session || '')) })
-        return
-      }
-      if (req.url === '/event') {
-        const event = String(body.event || '')
-        const session = String(body.session || '')
-        const lane = String(body.lane || '')
-        if (event === 'UserPromptSubmit') markSession(session, 'running', lane)
-        else if (event === 'Notification') markSession(session, 'waiting', lane)
-        else markSession(session, 'idle', lane)
-        reply({ ok: true })
+        const ok = await focusSession(String(body.session || ''))
+        res.writeHead(200, { 'content-type': 'application/json' })
+        res.end(JSON.stringify({ ok }))
         return
       }
       res.writeHead(404).end()
     })
-
     srv.on('error', reject)
     // Loopback only: nothing outside this machine has any business here.
     srv.listen(0, '127.0.0.1', () => {
@@ -176,6 +170,29 @@ function startServer(token: string): Promise<number> {
     })
   })
 }
+
+/**
+ * The notifier picks the window whose workspace holds a session's folder, and raises it
+ * by opening that folder — so it needs to know this window's folders and app name.
+ */
+function writeLink(): void {
+  if (!linkInfo) return
+  try {
+    mkdirSync(linksDir(HOME), { recursive: true })
+    writeFileSync(LINK_FILE, JSON.stringify({
+      ...linkInfo,
+      pid: process.pid,
+      folders: (vscode.workspace.workspaceFolders || []).map((f) => f.uri.fsPath),
+      workspaceFile: vscode.workspace.workspaceFile?.scheme === 'file' ? vscode.workspace.workspaceFile.fsPath : undefined,
+      appName: vscode.env.appName,
+      focusedAt: vscode.window.state.focused ? Date.now() : 0,
+    }, null, 2))
+  } catch (err) {
+    log(`could not write the link file: ${String(err)}`)
+  }
+}
+
+/* ------------------------------------------------------- settings & hooks */
 
 function syncConfig(): void {
   const cfg = vscode.workspace.getConfiguration('claudeNotify')
@@ -227,29 +244,6 @@ async function offerHooks(context: vscode.ExtensionContext, force = false): Prom
   }
 }
 
-let linkInfo: { port: number; token: string } | undefined
-
-/**
- * The notifier picks the window whose workspace holds a session's folder, and raises it
- * by opening that folder — so it needs to know this window's folders and app name.
- */
-function writeLink(): void {
-  if (!linkInfo) return
-  try {
-    mkdirSync(linksDir(HOME), { recursive: true })
-    writeFileSync(LINK_FILE, JSON.stringify({
-      ...linkInfo,
-      pid: process.pid,
-      folders: (vscode.workspace.workspaceFolders || []).map((f) => f.uri.fsPath),
-      workspaceFile: vscode.workspace.workspaceFile?.scheme === 'file' ? vscode.workspace.workspaceFile.fsPath : undefined,
-      appName: vscode.env.appName,
-      focusedAt: vscode.window.state.focused ? Date.now() : 0,
-    }, null, 2))
-  } catch (err) {
-    log(`could not write the link file: ${String(err)}`)
-  }
-}
-
 function runNotifier(context: vscode.ExtensionContext, args: string[]): Promise<string> {
   const script = context.asAbsolutePath(join('dist', 'claude-notify.mjs'))
   return new Promise((resolve) => {
@@ -261,6 +255,8 @@ function runNotifier(context: vscode.ExtensionContext, args: string[]): Promise<
     child.on('error', (err) => resolve(String(err)))
   })
 }
+
+/* --------------------------------------------------------------- lifecycle */
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   output = vscode.window.createOutputChannel('Claude Notify')
@@ -283,10 +279,18 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     try { rmSync(legacyLinkPath(HOME), { force: true }) } catch {}
     log(`listening on 127.0.0.1:${port}`)
   } catch (err) {
-    log(`could not start the listener: ${String(err)} — notifications fall back to vscode:// links`)
+    log(`could not start the listener: ${String(err)} — clicks fall back to vscode:// links`)
   }
 
+  watchSessions()
+  refreshStatusBar()
+  // fs.watch can miss events, and stale sessions only expire with time: refresh anyway.
+  const tick = setInterval(refreshStatusBar, 30_000)
+
   context.subscriptions.push(
+    { dispose: () => clearInterval(tick) },
+    { dispose: () => watcher?.close() },
+    vscode.commands.registerCommand('claudeNotify.showSessions', () => showSessions(context)),
     vscode.commands.registerCommand('claudeNotify.test', async () => {
       await runNotifier(context, ['--test'])
       vscode.window.showInformationMessage('Claude Notify: test notification sent. Click it — this session should come to the front.')
@@ -303,7 +307,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       await cfg.update('enabled', next, vscode.ConfigurationTarget.Global)
       vscode.window.showInformationMessage(`Claude Notify is ${next ? 'on' : 'off'}.`)
     }),
-    vscode.commands.registerCommand('claudeNotify.showSessions', showSessions),
     vscode.commands.registerCommand('claudeNotify.addHooks', () => offerHooks(context, true)),
     vscode.commands.registerCommand('claudeNotify.removeHooks', () => {
       const removed = unwireHooks(HOME)
@@ -325,6 +328,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
 export function deactivate(): void {
   server?.close()
+  watcher?.close()
   // Leaving it behind would point the notifier at a port nobody is listening on.
   try { rmSync(LINK_FILE, { force: true }) } catch {}
 }

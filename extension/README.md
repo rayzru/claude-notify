@@ -23,8 +23,17 @@ three sessions running, you end up checking each one by hand.
 - **One notification per session.** A newer one replaces the older, so what is on screen
   is the current state of each session, not a pile of history.
 - **Click to switch.** The click goes straight to that session's tab.
-- **Status bar.** How many sessions are running and how many are waiting for you. Click it
-  to go to the waiting one, or pick from the list when there are several.
+- **Every session, from every window.** The status bar counts what is running and what is
+  waiting across all your VS Code windows. Click it for the full list:
+
+  | | |
+  | --- | --- |
+  | **who** | the session's title, the same one Claude Code shows |
+  | **where** | its project, and whether it is in this window or which other one |
+  | **state** | waiting for you — with what it is asking — or running, and for how long |
+  | **size** | model and how much context the session is carrying |
+
+  Pick one and its window comes to the front with that session open.
 
 ## Requirements
 
@@ -51,7 +60,7 @@ Two one-time prompts, both expected:
 
 | Command | What it does |
 | --- | --- |
-| Claude Notify: Go to a session | the same as clicking the status bar |
+| Claude Notify: Go to a session | the list of every active session — the same as clicking the status bar |
 | Claude Notify: Send a test notification | one notification, to check it appears and the click works |
 | Claude Notify: Check that notifications work | checks everything below and names what is broken |
 | Claude Notify: Turn notifications on or off | master switch |
@@ -78,10 +87,14 @@ why the script does that part.
 
 Each VS Code window's extension listens on a loopback port that only this machine can
 reach, guarded by a random token, and records its port and workspace folders under
-`~/.claude/claude-notify/links/`. The script sends each event to the window whose
-workspace holds the session's folder — so with several windows open, every window counts
-its own sessions — and on a click brings that window to the front and asks it to focus the
-session. A session outside every workspace goes to the window you used last. The
+`~/.claude/claude-notify/links/`. On a click the script brings the window whose workspace
+holds the session's folder to the front and asks it to focus the session; a session outside
+every workspace goes to the window you used last.
+
+The script also keeps one small file per active session under
+`~/.claude/claude-notify/sessions/`, which every window reads for its status bar and list.
+The title and context size are read fresh from the end of the session's transcript when you
+open the list, rather than stored, since they change on every turn. The
 extension does that through the Claude Code extension's own command, so VS Code's
 confirmation prompt for external links never appears.
 
@@ -93,6 +106,12 @@ Uninstalling removes the hooks, the copied script and the link file. VS Code run
 cleanup after the next restart.
 
 ## Known limits
+
+- **Context is shown as a size, not a percentage.** The transcript rarely says how large the
+  model's window is, and a guessed percentage would be worse than an honest number.
+- **"Running" is as of the last event.** Claude Code reports a prompt, a wait and a finish,
+  but not the moment you answer a permission — so after you go to a waiting session it shows
+  as running until the turn ends.
 
 - **The focus command belongs to the Claude Code extension** and is not a documented API.
   If a future release renames it, clicks fall back to a `vscode://` link, which works

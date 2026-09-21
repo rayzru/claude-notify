@@ -114,7 +114,7 @@
     "package": "npx @vscode/vsce package --no-dependencies",
     "vscode:prepublish": "npm run build",
     "vscode:uninstall": "node ./dist/uninstall.js",
-    "test": "esbuild src/wiring.ts --bundle --platform=node --format=esm --outfile=test/.build/wiring.mjs --log-level=warning && node test/wiring.test.mjs && node test/link.test.mjs"
+    "test": "esbuild src/wiring.ts src/sessions.ts --bundle --platform=node --format=esm --outdir=test/.build --out-extension:.js=.mjs --log-level=warning && node test/wiring.test.mjs && node test/sessions.test.mjs && node test/link.test.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
