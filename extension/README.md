@@ -23,7 +23,8 @@ three sessions running, you end up checking each one by hand.
 - **One notification per session.** A newer one replaces the older, so what is on screen
   is the current state of each session, not a pile of history.
 - **Click to switch.** The click goes straight to that session's tab.
-- **Status bar.** How many sessions are running and how many are waiting for you.
+- **Status bar.** How many sessions are running and how many are waiting for you. Click it
+  to go to the waiting one, or pick from the list when there are several.
 
 ## Requirements
 
@@ -50,6 +51,7 @@ Two one-time prompts, both expected:
 
 | Command | What it does |
 | --- | --- |
+| Claude Notify: Go to a session | the same as clicking the status bar |
 | Claude Notify: Send a test notification | one notification, to check it appears and the click works |
 | Claude Notify: Check that notifications work | checks everything below and names what is broken |
 | Claude Notify: Turn notifications on or off | master switch |

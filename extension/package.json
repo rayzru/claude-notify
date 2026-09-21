@@ -28,6 +28,10 @@
   "contributes": {
     "commands": [
       {
+        "command": "claudeNotify.showSessions",
+        "title": "Claude Notify: Go to a session"
+      },
+      {
         "command": "claudeNotify.test",
         "title": "Claude Notify: Send a test notification"
       },

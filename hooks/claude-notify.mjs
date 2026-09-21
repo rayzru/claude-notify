@@ -27,13 +27,24 @@
 
 import { spawn, spawnSync } from 'node:child_process'
 import { request } from 'node:http'
-import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
-import { basename, join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const SELF = fileURLToPath(import.meta.url)
 const STATE_DIR = join(tmpdir(), 'claude-notify')
+// Off unless asked for: `"debug": true` in the config, or CLAUDE_NOTIFY_DEBUG=1.
+const DEBUG_LOG = join(homedir(), '.claude', 'claude-notify', 'debug.log')
+let debugOn = process.env.CLAUDE_NOTIFY_DEBUG === '1'
+function debug(line) {
+  if (!debugOn) return
+  try {
+    mkdirSync(dirname(DEBUG_LOG), { recursive: true })
+    appendFileSync(DEBUG_LOG, `${new Date().toISOString()} [${process.pid}] ${line}\n`)
+  } catch {}
+}
+
 // Written by the VS Code extension while it listens; absent when it is not installed.
 const EDITOR_LINK = join(homedir(), '.claude', 'claude-notify-vscode.json')
 const CONFIG_PATH = process.env.CLAUDE_NOTIFY_CONFIG || join(homedir(), '.claude', 'claude-notify.config.json')
@@ -54,6 +65,7 @@ const DEFAULTS = {
   uriScheme: 'vscode',
   extensionId: 'Anthropic.claude-code',
   staleHours: 24,
+  debug: false,
 }
 
 const STRINGS = {
@@ -403,24 +415,48 @@ function present(o) {
     return
   }
 
+  if (o.debug) debugOn = true
   const path = pidPath(o.group)
   const child = spawn(plan.cmd, plan.args, { stdio: ['ignore', 'pipe', 'ignore'] })
   writeState(path, process.pid)
+  debug(`presenter up group=${o.group} ppid=${process.ppid} notifier=${child.pid}`)
+  process.on('exit', (code) => debug(`presenter exit code=${code} group=${o.group}`))
 
   let out = ''
   child.stdout.on('data', (chunk) => { out += chunk })
 
-  const stop = () => {
+  let watch = null
+  const stop = (reason) => {
+    debug(`presenter stop: ${reason} group=${o.group}`)
+    if (watch) clearInterval(watch)
     try { child.kill('SIGTERM') } catch {}
     dropNotification(o.group)
     removeIfMine(path, process.pid)
     process.exit(0)
   }
-  process.on('SIGTERM', stop)
-  process.on('SIGINT', stop)
+  for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP']) process.on(signal, () => stop(signal))
 
-  child.on('error', () => removeIfMine(path, process.pid))
-  child.on('close', (code) => {
+  // A notification swiped away without an answer never reports back: terminal-notifier
+  // keeps waiting for a reply that cannot come, and the process lives forever. Check
+  // now and then that ours is still listed, and leave when it is not. -list does show
+  // an alert that is still on screen, so this cannot cut one short.
+  if (platform() === 'darwin' && plan.cmd.includes('terminal-notifier')) {
+    watch = setInterval(() => {
+      const res = spawnSync(plan.cmd, ['-list', o.group], { encoding: 'utf8' })
+      if (res.status !== 0) return // cannot tell: better to wait than to drop a live one
+      const listed = (res.stdout || '').split('\n').slice(1).some((row) => row.split('\t')[0] === o.group)
+      if (!listed) stop('notification gone without an answer')
+    }, 30_000)
+    watch.unref()
+  }
+
+  child.on('error', (err) => {
+    debug(`notifier error: ${err && err.message}`)
+    removeIfMine(path, process.pid)
+  })
+  child.on('close', (code, signal) => {
+    if (watch) clearInterval(watch)
+    debug(`notifier closed code=${code} signal=${signal} answer=${JSON.stringify(out.trim())}`)
     removeIfMine(path, process.pid)
     // libnotify older than 0.8 has no -A: fall back to a plain notification
     if (code !== 0 && plan.args.includes('-A')) {
@@ -443,8 +479,11 @@ function spawnPresenter(o) {
       detached: true,
       stdio: 'ignore',
     })
+    debug(`spawned presenter pid=${child.pid} group=${o.group}`)
     child.unref()
-  } catch {}
+  } catch (err) {
+    debug(`could not spawn presenter: ${err && err.message}`)
+  }
 }
 
 /* ------------------------------------------------------------- hook logic */
@@ -479,6 +518,7 @@ function compose(cfg, lang, { sessionId, lane, message, soundKey }) {
     group,
     uri,
     sessionId,
+    debug: Boolean(cfg.debug),
   }
 }
 
@@ -496,6 +536,8 @@ async function hookMode() {
 
   // The status bar counts sessions whether or not notifications are on, so the
   // extension hears every main-agent event before any of the early returns below.
+  if (cfg.debug) debugOn = true
+  debug(`hook ${event} session=${sessionId} subagent=${Boolean(data.agent_id)} ppid=${process.ppid}`)
   const link = data.agent_id ? null : editorLink()
   if (link) {
     const lane = basename(String(data.cwd || process.cwd()).replace(/[/\\]+$/, '')) || 'claude'

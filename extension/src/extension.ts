@@ -91,6 +91,42 @@ async function focusSession(sessionId: string): Promise<boolean> {
   }
 }
 
+/** The user went to it, so it no longer needs to call for attention. A running one stays counted. */
+async function openSession(sessionId: string): Promise<boolean> {
+  const ok = await focusSession(sessionId)
+  if (ok && sessions.get(sessionId)?.state === 'waiting') markSession(sessionId, 'idle', '')
+  return ok
+}
+
+function ago(at: number): string {
+  const minutes = Math.round((Date.now() - at) / 60_000)
+  return minutes < 1 ? 'just now' : `${minutes} min ago`
+}
+
+/**
+ * The status bar says "2 waiting"; clicking it should take you there, not open a report.
+ * One waiting session: go straight to it. Several, or only running ones: pick.
+ */
+async function showSessions(): Promise<void> {
+  const all = [...sessions.entries()]
+  const waiting = all.filter(([, s]) => s.state === 'waiting')
+  if (waiting.length === 1) {
+    await openSession(waiting[0][0])
+    return
+  }
+  if (!all.length) {
+    vscode.window.showInformationMessage('Claude Notify: no sessions running or waiting.')
+    return
+  }
+  const ordered = [...waiting, ...all.filter(([, s]) => s.state !== 'waiting')]
+  const pick = await vscode.window.showQuickPick(ordered.map(([id, s]) => ({
+    label: `${s.state === 'waiting' ? '$(bell-dot)' : '$(sync)'} ${s.lane || 'session'}`,
+    description: `${s.state} · ${ago(s.at)}`,
+    id,
+  })), { placeHolder: 'Go to a Claude Code session' })
+  if (pick) await openSession(pick.id)
+}
+
 function startServer(token: string): Promise<number> {
   return new Promise((resolve, reject) => {
     const srv = createServer(async (req: IncomingMessage, res: ServerResponse) => {
@@ -105,8 +141,7 @@ function startServer(token: string): Promise<number> {
       }
 
       if (req.url === '/focus') {
-        reply({ ok: await focusSession(String(body.session || '')) })
-        markSession(String(body.session || ''), 'idle', '')
+        reply({ ok: await openSession(String(body.session || '')) })
         return
       }
       if (req.url === '/event') {
@@ -199,7 +234,7 @@ function runNotifier(context: vscode.ExtensionContext, args: string[]): Promise<
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   output = vscode.window.createOutputChannel('Claude Notify')
   statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100)
-  statusBar.command = 'claudeNotify.doctor'
+  statusBar.command = 'claudeNotify.showSessions'
   context.subscriptions.push(output, statusBar)
 
   try {
@@ -236,6 +271,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       await cfg.update('enabled', next, vscode.ConfigurationTarget.Global)
       vscode.window.showInformationMessage(`Claude Notify is ${next ? 'on' : 'off'}.`)
     }),
+    vscode.commands.registerCommand('claudeNotify.showSessions', showSessions),
     vscode.commands.registerCommand('claudeNotify.addHooks', () => offerHooks(context, true)),
     vscode.commands.registerCommand('claudeNotify.removeHooks', () => {
       const removed = unwireHooks(HOME)
