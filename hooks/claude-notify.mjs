@@ -45,8 +45,8 @@ function debug(line) {
   } catch {}
 }
 
-// Written by the VS Code extension while it listens; absent when it is not installed.
-const EDITOR_LINK = join(homedir(), '.claude', 'claude-notify-vscode.json')
+// One file per VS Code window running the extension; empty when it is not installed.
+const LINKS_DIR = join(homedir(), '.claude', 'claude-notify', 'links')
 const CONFIG_PATH = process.env.CLAUDE_NOTIFY_CONFIG || join(homedir(), '.claude', 'claude-notify.config.json')
 const RESOLVED_WITHOUT_CLICK = new Set(['@TIMEOUT', '@CLOSED', ''])
 const MAC_SOUNDS = { done: 'Glass', waiting: 'Ping', error: 'Basso' }
@@ -231,14 +231,60 @@ function sweepStale(hours) {
 
 /* ------------------------------------------------------------- editor link */
 
-/** The extension's loopback listener, if one is running right now. */
-function editorLink() {
-  const link = readJsonFile(EDITOR_LINK)
-  if (!link || !Number.isInteger(link.port) || typeof link.token !== 'string') return null
-  if (link.pid) {
-    try { process.kill(link.pid, 0) } catch { return null } // left behind by a crashed editor
+/** Every VS Code window whose extension is listening, most recently focused first. */
+function editorLinks() {
+  let names = []
+  try { names = readdirSync(LINKS_DIR) } catch { return [] }
+  const links = []
+  for (const name of names) {
+    if (!name.endsWith('.json')) continue
+    const path = join(LINKS_DIR, name)
+    const link = readJsonFile(path)
+    if (!link || !Number.isInteger(link.port) || typeof link.token !== 'string') continue
+    try {
+      process.kill(link.pid, 0)
+    } catch {
+      try { unlinkSync(path) } catch {} // left behind by a crashed window
+      continue
+    }
+    links.push(link)
   }
-  return link
+  return links.sort((a, b) => (b.focusedAt || 0) - (a.focusedAt || 0))
+}
+
+/**
+ * The window that owns a session is the one whose workspace holds the session's folder.
+ * With several windows open, sending to any other one would focus — or worse, open a
+ * duplicate of — the session in a window the user is not looking at. When no workspace
+ * holds it, fall back to the window used last.
+ */
+function ownerLink(cwd) {
+  const links = editorLinks()
+  if (!links.length) return null
+  const dir = String(cwd || '').replace(/[/\\]+$/, '')
+  let best = null
+  let bestLength = -1
+  for (const link of links) {
+    for (const folder of link.folders || []) {
+      const root = String(folder).replace(/[/\\]+$/, '')
+      if ((dir === root || dir.startsWith(root + '/')) && root.length > bestLength) {
+        best = link
+        bestLength = root.length
+      }
+    }
+  }
+  return best || links[0]
+}
+
+/**
+ * An extension cannot bring its own window to the front — VS Code has no API for it.
+ * Opening the window's folder does: VS Code focuses the window that already has it.
+ */
+function raiseWindow(link) {
+  if (platform() !== 'darwin') return
+  const target = link.workspaceFile || (link.folders || [])[0]
+  if (!target || !existsSync(target)) return
+  spawnSync('open', ['-a', link.appName || 'Visual Studio Code', target], { stdio: 'ignore' })
 }
 
 /** Resolves true only when the extension answered and said it did the thing. */
@@ -282,9 +328,12 @@ function postToEditor(link, path, body, timeoutMs) {
  * click only raises a confirmation prompt. So the link is the fallback, not the path.
  */
 async function focusOrOpen(o) {
-  const link = editorLink()
+  const link = ownerLink(o.cwd)
   if (link && UUID.test(String(o.sessionId))) {
-    if (await postToEditor(link, '/focus', { session: o.sessionId }, 1500)) return
+    raiseWindow(link)
+    const ok = await postToEditor(link, '/focus', { session: o.sessionId }, 1500)
+    debug(`focus session=${o.sessionId} window=${link.pid} ok=${ok}`)
+    if (ok) return
   }
   if (o.uri) openUri(o.uri)
 }
@@ -417,13 +466,15 @@ function present(o) {
 
   if (o.debug) debugOn = true
   const path = pidPath(o.group)
-  const child = spawn(plan.cmd, plan.args, { stdio: ['ignore', 'pipe', 'ignore'] })
+  const child = spawn(plan.cmd, plan.args, { stdio: ['ignore', 'pipe', 'pipe'] })
   writeState(path, process.pid)
   debug(`presenter up group=${o.group} ppid=${process.ppid} notifier=${child.pid}`)
   process.on('exit', (code) => debug(`presenter exit code=${code} group=${o.group}`))
 
   let out = ''
+  let err = ''
   child.stdout.on('data', (chunk) => { out += chunk })
+  child.stderr.on('data', (chunk) => { err += chunk })
 
   let watch = null
   const stop = (reason) => {
@@ -456,7 +507,7 @@ function present(o) {
   })
   child.on('close', (code, signal) => {
     if (watch) clearInterval(watch)
-    debug(`notifier closed code=${code} signal=${signal} answer=${JSON.stringify(out.trim())}`)
+    debug(`notifier closed code=${code} signal=${signal} answer=${JSON.stringify(out.trim())} stderr=${JSON.stringify(err.trim().slice(0, 300))}`)
     removeIfMine(path, process.pid)
     // libnotify older than 0.8 has no -A: fall back to a plain notification
     if (code !== 0 && plan.args.includes('-A')) {
@@ -500,7 +551,7 @@ function readStdinJson() {
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
-function compose(cfg, lang, { sessionId, lane, message, soundKey }) {
+function compose(cfg, lang, { sessionId, lane, message, soundKey, cwd }) {
   const group = cfg.groupPerSession ? `claude-${safeId(sessionId)}` : `claude-${safeId(sessionId)}-${Date.now()}`
   const wantsClick = cfg.click === 'focusSession' || (cfg.click === 'auto' && runsInEditor())
   const uri = wantsClick && UUID.test(String(sessionId))
@@ -518,6 +569,7 @@ function compose(cfg, lang, { sessionId, lane, message, soundKey }) {
     group,
     uri,
     sessionId,
+    cwd: cwd || '',
     debug: Boolean(cfg.debug),
   }
 }
@@ -538,7 +590,7 @@ async function hookMode() {
   // extension hears every main-agent event before any of the early returns below.
   if (cfg.debug) debugOn = true
   debug(`hook ${event} session=${sessionId} subagent=${Boolean(data.agent_id)} ppid=${process.ppid}`)
-  const link = data.agent_id ? null : editorLink()
+  const link = data.agent_id ? null : ownerLink(data.cwd)
   if (link) {
     const lane = basename(String(data.cwd || process.cwd()).replace(/[/\\]+$/, '')) || 'claude'
     await postToEditor(link, '/event', { event, session: sessionId, lane }, 400)
@@ -557,7 +609,7 @@ async function hookMode() {
 
   if (event === 'Notification') {
     if (!cfg.events.waitingInput) return
-    notify(cfg, { sessionId, lane, message: data.message || t(lang, 'waiting'), soundKey: 'waiting' })
+    notify(cfg, { sessionId, lane, cwd: data.cwd, message: data.message || t(lang, 'waiting'), soundKey: 'waiting' })
     return
   }
 
@@ -572,7 +624,7 @@ async function hookMode() {
 
   if (event === 'StopFailure') {
     if (!cfg.events.error) return
-    notify(cfg, { sessionId, lane, message: t(lang, 'error'), soundKey: 'error' })
+    notify(cfg, { sessionId, lane, cwd: data.cwd, message: t(lang, 'error'), soundKey: 'error' })
     return
   }
 
@@ -582,7 +634,7 @@ async function hookMode() {
   const message = elapsed === null
     ? t(lang, 'done')
     : t(lang, 'doneIn', { n: Math.max(1, Math.round(elapsed / 60)) })
-  notify(cfg, { sessionId, lane, message, soundKey: 'done' })
+  notify(cfg, { sessionId, lane, cwd: data.cwd, message, soundKey: 'done' })
 }
 
 /* --------------------------------------------------------------- entry */
@@ -747,9 +799,10 @@ function doctor() {
 
   if (!runsInEditor()) {
     warn('not running under the VS Code extension — notifications still fire, but there is no tab to click through to')
-  } else if (editorLink()) {
+  } else if (editorLinks().length) {
+    const windows = editorLinks().length
     ok(`running under the editor (${process.env.CLAUDE_CODE_ENTRYPOINT || 'vscode'})`)
-    ok('Claude Notify extension is listening — clicks go straight to the tab, no VS Code prompt')
+    ok(`Claude Notify extension is listening in ${windows} window${windows > 1 ? 's' : ''} — clicks go to the window that owns the session`)
   } else {
     ok(`running under the editor (${process.env.CLAUDE_CODE_ENTRYPOINT || 'vscode'})`)
     say('    ', 'Claude Notify extension not running — clicks use vscode:// links instead')

@@ -78,10 +78,12 @@ test('config: writes our keys, keeps the rest', () => {
 test('full removal leaves nothing behind', () => {
   const h = fresh(); const src = join(h, 'b.mjs'); writeFileSync(src, '//')
   w.installScript(src, h); w.wireHooks(h)
-  writeFileSync(w.editorLinkPath(h), '{}')
+  writeFileSync(w.legacyLinkPath(h), '{}')
+  mkdirSync(w.linksDir(h), { recursive: true }); writeFileSync(w.linkPath(h, 123), '{}')
   assert.equal(w.removeEverything(h), 4)
   assert.equal(existsSync(w.stableScriptPath(h)), false)
-  assert.equal(existsSync(w.editorLinkPath(h)), false)
+  assert.equal(existsSync(w.legacyLinkPath(h)), false)
+  assert.equal(existsSync(w.linkPath(h, 123)), false)
   assert.equal(w.hooksWired(h), false)
 })
 

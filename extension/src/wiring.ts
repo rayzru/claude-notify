@@ -16,7 +16,11 @@ const settingsPath = (home: string) => join(claudeDir(home), 'settings.json')
  * name, so hooks pointing into it would break on every update.
  */
 export const stableScriptPath = (home: string) => join(claudeDir(home), 'claude-notify', 'claude-notify.mjs')
-export const editorLinkPath = (home: string) => join(claudeDir(home), 'claude-notify-vscode.json')
+/** Written by versions before per-window links; removed on sight. */
+export const legacyLinkPath = (home: string) => join(claudeDir(home), 'claude-notify-vscode.json')
+/** One file per VS Code window, so several windows do not overwrite each other. */
+export const linksDir = (home: string) => join(claudeDir(home), 'claude-notify', 'links')
+export const linkPath = (home: string, pid: number) => join(linksDir(home), `${pid}.json`)
 export const configPath = (home: string) => join(claudeDir(home), 'claude-notify.config.json')
 
 const hookCommand = (home: string) => `node "${stableScriptPath(home)}"`
@@ -112,10 +116,10 @@ export function writeConfig(home: string, values: {
   writeFileSync(path, JSON.stringify(next, null, 2) + '\n')
 }
 
-/** Leaves nothing behind: hooks, the copied script, the link file. */
+/** Leaves nothing behind: hooks, the copied script, the link files. */
 export function removeEverything(home: string): number {
   const removed = unwireHooks(home)
   rmSync(join(claudeDir(home), 'claude-notify'), { recursive: true, force: true })
-  rmSync(editorLinkPath(home), { force: true })
+  rmSync(legacyLinkPath(home), { force: true })
   return removed
 }

@@ -76,9 +76,12 @@ whether it is worth a notification, and shows one through `terminal-notifier`. A
 extension cannot show a system notification itself — VS Code has no API for it — which is
 why the script does that part.
 
-The extension listens on a loopback port that only this machine can reach, guarded by a
-random token written to `~/.claude/claude-notify-vscode.json`. The script sends it each
-event, which feeds the status bar, and asks it to focus a session when you click. The
+Each VS Code window's extension listens on a loopback port that only this machine can
+reach, guarded by a random token, and records its port and workspace folders under
+`~/.claude/claude-notify/links/`. The script sends each event to the window whose
+workspace holds the session's folder — so with several windows open, every window counts
+its own sessions — and on a click brings that window to the front and asks it to focus the
+session. A session outside every workspace goes to the window you used last. The
 extension does that through the Claude Code extension's own command, so VS Code's
 confirmation prompt for external links never appears.
 
@@ -91,8 +94,6 @@ cleanup after the next restart.
 
 ## Known limits
 
-- **One VS Code window at a time.** With several windows open, events and clicks go to the
-  one that started last.
 - **The focus command belongs to the Claude Code extension** and is not a documented API.
   If a future release renames it, clicks fall back to a `vscode://` link, which works
   after VS Code asks once.

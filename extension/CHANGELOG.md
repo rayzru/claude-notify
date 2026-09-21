@@ -10,4 +10,6 @@ First release.
 - Running and waiting sessions in the status bar; clicking it goes to the waiting one.
 - Adds its hooks to `~/.claude/settings.json` only after asking, and removes them on
   uninstall.
+- Works with several VS Code windows open: each session is routed to the window whose
+  workspace holds it, and a click brings that window to the front.
 - A notification dismissed without an answer no longer leaves a process waiting forever.

@@ -1,12 +1,12 @@
 import { spawn } from 'node:child_process'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import * as vscode from 'vscode'
 import {
-  editorLinkPath, hooksWired, installScript, pluginInstalled, unwireHooks, wireHooks, writeConfig,
+  hooksWired, installScript, legacyLinkPath, linkPath, linksDir, pluginInstalled, unwireHooks, wireHooks, writeConfig,
 } from './wiring'
 
 /**
@@ -19,7 +19,8 @@ import {
  * raises the window, which looks exactly like a link pointing at the wrong session.
  */
 const HOME = homedir()
-const STATE_FILE = editorLinkPath(HOME)
+const LINK_FILE = linkPath(HOME, process.pid)
+const SESSION_TTL_MS = 3 * 3600_000
 const DECLINED_KEY = 'claudeNotify.hooksDeclined'
 const CLAUDE_EXTENSION_OPEN = 'claude-vscode.primaryEditor.open'
 
@@ -49,8 +50,15 @@ function readBody(req: IncomingMessage): Promise<any> {
   })
 }
 
+/** A session closed while running or waiting never sends Stop; do not count it forever. */
+function pruneSessions(): void {
+  const cutoff = Date.now() - SESSION_TTL_MS
+  for (const [id, s] of sessions) if (s.at < cutoff) sessions.delete(id)
+}
+
 function refreshStatusBar(): void {
   if (!statusBar) return
+  pruneSessions()
   if (!vscode.workspace.getConfiguration('claudeNotify').get<boolean>('statusBar', true)) {
     statusBar.hide()
     return
@@ -219,6 +227,29 @@ async function offerHooks(context: vscode.ExtensionContext, force = false): Prom
   }
 }
 
+let linkInfo: { port: number; token: string } | undefined
+
+/**
+ * The notifier picks the window whose workspace holds a session's folder, and raises it
+ * by opening that folder — so it needs to know this window's folders and app name.
+ */
+function writeLink(): void {
+  if (!linkInfo) return
+  try {
+    mkdirSync(linksDir(HOME), { recursive: true })
+    writeFileSync(LINK_FILE, JSON.stringify({
+      ...linkInfo,
+      pid: process.pid,
+      folders: (vscode.workspace.workspaceFolders || []).map((f) => f.uri.fsPath),
+      workspaceFile: vscode.workspace.workspaceFile?.scheme === 'file' ? vscode.workspace.workspaceFile.fsPath : undefined,
+      appName: vscode.env.appName,
+      focusedAt: vscode.window.state.focused ? Date.now() : 0,
+    }, null, 2))
+  } catch (err) {
+    log(`could not write the link file: ${String(err)}`)
+  }
+}
+
 function runNotifier(context: vscode.ExtensionContext, args: string[]): Promise<string> {
   const script = context.asAbsolutePath(join('dist', 'claude-notify.mjs'))
   return new Promise((resolve) => {
@@ -247,8 +278,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const token = randomBytes(24).toString('hex')
   try {
     const port = await startServer(token)
-    mkdirSync(join(homedir(), '.claude'), { recursive: true })
-    writeFileSync(STATE_FILE, JSON.stringify({ port, token, pid: process.pid }, null, 2))
+    linkInfo = { port, token }
+    writeLink()
+    try { rmSync(legacyLinkPath(HOME), { force: true }) } catch {}
     log(`listening on 127.0.0.1:${port}`)
   } catch (err) {
     log(`could not start the listener: ${String(err)} — notifications fall back to vscode:// links`)
@@ -279,6 +311,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         ? `Claude Notify: removed ${removed} hook${removed > 1 ? 's' : ''} from ~/.claude/settings.json.`
         : 'Claude Notify: no hooks of ours to remove.')
     }),
+    vscode.window.onDidChangeWindowState((state) => { if (state.focused) writeLink() }),
+    vscode.workspace.onDidChangeWorkspaceFolders(() => writeLink()),
     vscode.workspace.onDidChangeConfiguration((e) => {
       if (!e.affectsConfiguration('claudeNotify')) return
       syncConfig()
@@ -291,10 +325,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
 export function deactivate(): void {
   server?.close()
-  // Leaving the file behind would point hooks at a port nobody is listening on — but
-  // with two windows open the file may belong to the other one, which is still alive.
-  try {
-    const link = JSON.parse(readFileSync(STATE_FILE, 'utf8'))
-    if (link.pid === process.pid) rmSync(STATE_FILE, { force: true })
-  } catch {}
+  // Leaving it behind would point the notifier at a port nobody is listening on.
+  try { rmSync(LINK_FILE, { force: true }) } catch {}
 }
