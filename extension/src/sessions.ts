@@ -1,4 +1,4 @@
-import { closeSync, existsSync, fstatSync, openSync, readdirSync, readFileSync, readSync, unlinkSync } from 'node:fs'
+import { closeSync, existsSync, fstatSync, openSync, readdirSync, readFileSync, readSync, statSync, unlinkSync } from 'node:fs'
 import { basename, join } from 'node:path'
 
 /**
@@ -22,19 +22,58 @@ export interface Details {
   title: string
   model: string
   contextTokens: number
+  cwd: string
 }
 
 export const SESSION_TTL_MS = 3 * 3600_000
+/** A transcript written this recently belongs to a session that is working right now. */
+export const ACTIVE_MS = 2 * 60_000
+/** "Running" with a transcript quiet this long was interrupted — a quit editor, a killed process. */
+export const STALLED_MS = 10 * 60_000
+/** Claude Code appends a few housekeeping lines right after a turn ends; they are not a new turn. */
+export const AFTER_STOP_MS = 30_000
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+function mtime(path: string): number {
+  try { return statSync(path).mtimeMs } catch { return 0 }
+}
+
+/** Top-level transcripts written since `since`. Subagents keep theirs in subfolders, skipped. */
+function recentTranscripts(projectsDir: string, since: number): Map<string, { path: string; at: number }> {
+  const found = new Map<string, { path: string; at: number }>()
+  let projects: string[] = []
+  try { projects = readdirSync(projectsDir) } catch { return found }
+  for (const project of projects) {
+    let files: string[] = []
+    try { files = readdirSync(join(projectsDir, project)) } catch { continue }
+    for (const file of files) {
+      if (!file.endsWith('.jsonl')) continue
+      const id = file.slice(0, -'.jsonl'.length)
+      if (!UUID.test(id)) continue
+      const path = join(projectsDir, project, file)
+      const at = mtime(path)
+      if (at >= since) found.set(id, { path, at })
+    }
+  }
+  return found
+}
 
 function readJson(path: string): any {
   try { return JSON.parse(readFileSync(path, 'utf8')) } catch { return null }
 }
 
-/** Active sessions, stale ones removed on the way: a session closed mid-turn never sends Stop. */
-export function readSessions(dir: string, now = Date.now()): Session[] {
+/**
+ * Active sessions. A prompt, a wait and a finish come from hooks, but hooks alone miss
+ * too much: a session that resumes its interrupted turn after an editor restart sends no
+ * prompt, and one killed mid-turn never sends a finish. What a working session always
+ * does is write its transcript, so that decides "running"; the hooks decide "waiting"
+ * and mark where a turn ended.
+ */
+export function readSessions(dir: string, projectsDir = '', now = Date.now()): Session[] {
+  const registry = new Map<string, any>()
   let names: string[] = []
-  try { names = readdirSync(dir) } catch { return [] }
-  const out: Session[] = []
+  try { names = readdirSync(dir) } catch {}
   for (const name of names) {
     if (!name.endsWith('.json')) continue
     const path = join(dir, name)
@@ -43,9 +82,43 @@ export function readSessions(dir: string, now = Date.now()): Session[] {
       try { unlinkSync(path) } catch {}
       continue
     }
-    if (s.state !== 'waiting' && s.state !== 'running') continue
-    out.push(s)
+    registry.set(s.session, s)
   }
+
+  const out: Session[] = []
+  const seen = new Set<string>()
+  for (const s of registry.values()) {
+    seen.add(s.session)
+    const written = s.transcript ? mtime(s.transcript) : 0
+    if (s.state === 'waiting') {
+      out.push(s)
+    } else if (s.state === 'running') {
+      // no transcript to go by: trust the hook, within the same window of time
+      const lastSign = s.transcript ? Math.max(written, s.at) : s.at
+      if (lastSign > now - STALLED_MS) out.push(s)
+    } else if (s.state === 'done') {
+      // written again well after the turn ended: working again without a prompt
+      if (written > s.at + AFTER_STOP_MS && written > now - ACTIVE_MS) out.push({ ...s, state: 'running', at: written })
+    }
+  }
+
+  if (projectsDir) {
+    for (const [id, t] of recentTranscripts(projectsDir, now - ACTIVE_MS)) {
+      if (seen.has(id)) continue
+      const d = readDetails(t.path)
+      const cwd = d.cwd
+      out.push({
+        session: id,
+        state: 'running',
+        message: '',
+        cwd,
+        project: basename(cwd.replace(/[/\\]+$/, '')) || cwd,
+        transcript: t.path,
+        at: t.at,
+      })
+    }
+  }
+
   // Waiting first, longest-waiting on top; then running, most recent on top.
   return out.sort((a, b) => {
     if (a.state !== b.state) return a.state === 'waiting' ? -1 : 1
@@ -53,7 +126,8 @@ export function readSessions(dir: string, now = Date.now()): Session[] {
   })
 }
 
-function readTail(path: string, bytes: number): string {
+/** The last `bytes` of a file, and whether that cut into it — then the first line is partial. */
+function readTail(path: string, bytes: number): { text: string; cut: boolean } {
   let fd: number | undefined
   try {
     fd = openSync(path, 'r')
@@ -61,9 +135,9 @@ function readTail(path: string, bytes: number): string {
     const length = Math.min(bytes, size)
     const buf = Buffer.alloc(length)
     readSync(fd, buf, 0, length, size - length)
-    return buf.toString('utf8')
+    return { text: buf.toString('utf8'), cut: size > length }
   } catch {
-    return ''
+    return { text: '', cut: false }
   } finally {
     if (fd !== undefined) try { closeSync(fd) } catch {}
   }
@@ -75,13 +149,16 @@ function readTail(path: string, bytes: number): string {
  * even when the whole file runs to megabytes.
  */
 export function readDetails(transcript: string): Details {
-  const details: Details = { title: '', model: '', contextTokens: 0 }
+  const details: Details = { title: '', model: '', contextTokens: 0, cwd: '' }
   if (!transcript || !existsSync(transcript)) return details
-  const lines = readTail(transcript, 128 * 1024).split('\n').slice(1) // first one is cut
+  const tail = readTail(transcript, 128 * 1024)
+  const lines = tail.text.split('\n')
+  if (tail.cut) lines.shift() // starts mid-line; a short transcript is read whole and keeps it
   for (const line of lines) {
-    if (!line.includes('"ai-title"') && !line.includes('"usage"')) continue
+    if (!line.includes('"ai-title"') && !line.includes('"usage"') && !line.includes('"cwd"')) continue
     let d: any
     try { d = JSON.parse(line) } catch { continue }
+    if (typeof d.cwd === 'string' && d.cwd) details.cwd = d.cwd
     if (d.type === 'ai-title' && d.aiTitle) details.title = String(d.aiTitle)
     const usage = d.type === 'assistant' ? d.message?.usage : undefined
     if (usage) {

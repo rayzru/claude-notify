@@ -33,8 +33,10 @@ async function fakeWindow(name, folders, focusedAt, pid = process.pid) {
 }
 
 const run = (args, payload) => new Promise((resolve) => {
-  const p = spawn(process.execPath, [SCRIPT, ...args], { env: { ...process.env, HOME: home }, stdio: ['pipe', 'ignore', 'ignore'] })
-  p.on('close', resolve)
+  const p = spawn(process.execPath, [SCRIPT, ...args], { env: { ...process.env, HOME: home }, stdio: ['pipe', 'pipe', 'ignore'] })
+  let out = ''
+  p.stdout.on('data', (c) => { out += c })
+  p.on('close', () => resolve(out.trim()))
   p.stdin.end(payload ? JSON.stringify(payload) : '')
 })
 const hook = (payload) => run([], payload)
@@ -62,7 +64,7 @@ ok('subagents stay off the list')
 
 const a = await fakeWindow('a', ['/work/app'], 100)
 const b = await fakeWindow('b', ['/work/planner'], 200)
-await run(['--focus', A])
+assert.equal(await run(['--focus', A]), 'focused')
 assert.equal(a.got.length, 1); assert.equal(b.got.length, 0)
 assert.equal(a.got[0].path, '/focus'); assert.equal(a.got[0].body.session, A); assert.equal(a.got[0].token, a.token)
 ok('picking a session goes to the window whose folder holds it, not the one used last')
@@ -71,9 +73,9 @@ assert.equal(entry(A).state, 'running')
 ok('once the user has gone to a waiting session, it stops calling for attention')
 
 await hook({ hook_event_name: 'UserPromptSubmit', session_id: B, cwd: '/somewhere/else' })
-await run(['--focus', B])
-assert.equal(b.got.length, 1)
-ok('a session outside every workspace goes to the window focused most recently')
+assert.equal(await run(['--focus', B]), 'no-window')
+assert.equal(a.got.length, 1); assert.equal(b.got.length, 0)
+ok('a session no window holds is sent nowhere — a stranger window would show an empty tab')
 
 const dead = await fakeWindow('dead', ['/work/app/packages'], 999, 999999)
 await run(['--focus', A])
@@ -82,8 +84,9 @@ assert.equal(existsSync(dead.file), false)
 ok('a window that crashed is skipped and its link file cleaned up')
 
 await hook({ hook_event_name: 'Stop', session_id: A, cwd: '/work/app/packages/ui' })
-assert.equal(entry(A), null)
-ok('Stop takes the session off the list')
+assert.equal(entry(A).state, 'done')
+assert.equal(entry(A).cwd, '/work/app/packages/ui')
+ok('Stop marks where the turn ended, so housekeeping writes after it are not mistaken for work')
 
 for (const w of [a, b, dead]) w.close()
 console.log(`\n${n} passed`)

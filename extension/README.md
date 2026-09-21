@@ -33,7 +33,9 @@ three sessions running, you end up checking each one by hand.
   | **state** | waiting for you — with what it is asking — or running, and for how long |
   | **size** | model and how much context the session is carrying |
 
-  Pick one and its window comes to the front with that session open.
+  Pick one and its window comes to the front with that session open. A session that no
+  window has open — started in a terminal, or in a window you closed — is listed as such,
+  and picking it offers to open its folder instead of guessing a window.
 
 ## Requirements
 
@@ -93,8 +95,9 @@ every workspace goes to the window you used last.
 
 The script also keeps one small file per active session under
 `~/.claude/claude-notify/sessions/`, which every window reads for its status bar and list.
-The title and context size are read fresh from the end of the session's transcript when you
-open the list, rather than stored, since they change on every turn. The
+Whether a session is running is read from its transcript: a working session keeps writing
+to it. The title and context size come from the end of that same file when you open the list,
+since they change on every turn. The
 extension does that through the Claude Code extension's own command, so VS Code's
 confirmation prompt for external links never appears.
 
@@ -109,9 +112,10 @@ cleanup after the next restart.
 
 - **Context is shown as a size, not a percentage.** The transcript rarely says how large the
   model's window is, and a guessed percentage would be worse than an honest number.
-- **"Running" is as of the last event.** Claude Code reports a prompt, a wait and a finish,
-  but not the moment you answer a permission — so after you go to a waiting session it shows
-  as running until the turn ends.
+- **"Running" means the transcript is being written.** Hooks alone miss sessions that resume
+  after an editor restart without a new prompt, and never hear about one killed mid-turn. A
+  working session always writes its transcript, so that decides: silent for ten minutes, and
+  a session that claimed to be running is taken off the list.
 
 - **The focus command belongs to the Claude Code extension** and is not a documented API.
   If a future release renames it, clicks fall back to a `vscode://` link, which works

@@ -9,6 +9,8 @@ First release.
   prompt for external links.
 - Every active session from every window in the status bar; click for the list — who,
   where, in what state, which model and how much context — and pick one to go there.
+  Running is read from the session's transcript, so sessions that resumed after an editor
+  restart show up and ones killed mid-turn drop off.
 - Adds its hooks to `~/.claude/settings.json` only after asking, and removes them on
   uninstall.
 - Works with several VS Code windows open: each session is routed to the window whose

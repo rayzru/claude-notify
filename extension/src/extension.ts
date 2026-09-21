@@ -28,6 +28,8 @@ import { ago, modelName, ownerOf, readDetails, readSessions, tokens, windowName,
 const HOME = homedir()
 const LINK_FILE = linkPath(HOME, process.pid)
 const SESSIONS = sessionsDir(HOME)
+// Claude Code's own transcripts: a working session keeps writing to its file.
+const PROJECTS = join(HOME, '.claude', 'projects')
 const DECLINED_KEY = 'claudeNotify.hooksDeclined'
 const CLAUDE_EXTENSION_OPEN = 'claude-vscode.primaryEditor.open'
 
@@ -63,7 +65,7 @@ function refreshStatusBar(): void {
     statusBar.hide()
     return
   }
-  const all = readSessions(SESSIONS)
+  const all = readSessions(SESSIONS, PROJECTS)
   const waiting = all.filter((s) => s.state === 'waiting').length
   const running = all.length - waiting
   if (!all.length) {
@@ -87,7 +89,7 @@ function whereLabel(s: Session): string {
 
 /** Every active session: who, where, in what state, how full its context is. */
 async function showSessions(context: vscode.ExtensionContext): Promise<void> {
-  const all = readSessions(SESSIONS)
+  const all = readSessions(SESSIONS, PROJECTS)
   if (!all.length) {
     vscode.window.showInformationMessage('Claude Notify: no Claude Code sessions running or waiting.')
     return
@@ -98,11 +100,15 @@ async function showSessions(context: vscode.ExtensionContext): Promise<void> {
       d.model && modelName(d.model),
       d.contextTokens ? `context ${tokens(d.contextTokens)}` : '',
     ].filter(Boolean).join(' · ')
+    const where = whereLabel(s)
     return {
       label: `${s.state === 'waiting' ? '$(bell-dot)' : '$(sync~spin)'} ${d.title || s.project}`,
-      description: `${s.state === 'waiting' ? 'waiting for you' : 'running'} ${ago(s.at)} · ${s.project} · ${whereLabel(s)}`,
+      description: `${s.state === 'waiting' ? 'waiting for you' : 'running'} ${ago(s.at)} · ${s.project} · ${where}`,
       detail: s.state === 'waiting' && s.message ? `${s.message}${facts ? ` — ${facts}` : ''}` : facts,
       id: s.session,
+      cwd: s.cwd,
+      title: d.title || s.project,
+      open: where !== 'no open window',
     }
   })
   const pick = await vscode.window.showQuickPick(items, {
@@ -111,8 +117,18 @@ async function showSessions(context: vscode.ExtensionContext): Promise<void> {
     matchOnDetail: true,
   })
   if (!pick) return
+  if (!pick.open) {
+    // Sending it to a window that does not hold its project shows an empty Claude tab.
+    const openFolder = 'Open its folder in a new window'
+    const answer = await vscode.window.showInformationMessage(
+      `"${pick.title}" is not open in any VS Code window.`, openFolder)
+    if (answer === openFolder && pick.cwd) {
+      await vscode.commands.executeCommand('vscode.openFolder', vscode.Uri.file(pick.cwd), { forceNewWindow: true })
+    }
+    return
+  }
   // The notifier routes it: raises the owning window, then asks that window to focus it.
-  await runNotifier(context, ['--focus', pick.id])
+  await runNotifier(context, ['--focus', pick.id, pick.cwd])
   refreshStatusBar()
 }
 

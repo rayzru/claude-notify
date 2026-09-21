@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { existsSync, mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, mkdirSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import * as s from './.build/sessions.mjs'
@@ -12,27 +12,27 @@ const NOW = 10_000_000_000
 
 test('waiting first (longest wait on top), then running (most recent on top)', () => {
   const d = dir()
-  put(d, 'r-old', { state: 'running', at: NOW - 600_000 })
+  put(d, 'r-old', { state: 'running', at: NOW - 300_000 })
   put(d, 'w-new', { state: 'waiting', at: NOW - 60_000 })
   put(d, 'r-new', { state: 'running', at: NOW - 60_000 })
   put(d, 'w-old', { state: 'waiting', at: NOW - 900_000 })
-  assert.deepEqual(s.readSessions(d, NOW).map((x) => x.session), ['w-old', 'w-new', 'r-new', 'r-old'])
+  assert.deepEqual(s.readSessions(d, '', NOW).map((x) => x.session), ['w-old', 'w-new', 'r-new', 'r-old'])
 })
 
 test('a session silent for three hours is dropped and its file removed', () => {
   const d = dir()
   put(d, 'stale', { state: 'running', at: NOW - s.SESSION_TTL_MS - 1 })
   put(d, 'live', { state: 'running', at: NOW })
-  assert.deepEqual(s.readSessions(d, NOW).map((x) => x.session), ['live'])
+  assert.deepEqual(s.readSessions(d, '', NOW).map((x) => x.session), ['live'])
   assert.equal(existsSync(join(d, 'stale.json')), false)
 })
 
 test('unreadable files are cleaned up, a missing directory is an empty list', () => {
   const d = dir()
   writeFileSync(join(d, 'broken.json'), '{ nope')
-  assert.deepEqual(s.readSessions(d, NOW), [])
+  assert.deepEqual(s.readSessions(d, '', NOW), [])
   assert.equal(existsSync(join(d, 'broken.json')), false)
-  assert.deepEqual(s.readSessions(join(d, 'absent'), NOW), [])
+  assert.deepEqual(s.readSessions(join(d, 'absent'), '', NOW), [])
 })
 
 test('title, model and context come from the latest lines of the transcript', () => {
@@ -54,8 +54,8 @@ test('title, model and context come from the latest lines of the transcript', ()
 })
 
 test('a missing transcript gives empty details rather than an error', () => {
-  assert.deepEqual(s.readDetails('/nope/t.jsonl'), { title: '', model: '', contextTokens: 0 })
-  assert.deepEqual(s.readDetails(''), { title: '', model: '', contextTokens: 0 })
+  assert.deepEqual(s.readDetails('/nope/t.jsonl'), { title: '', model: '', contextTokens: 0, cwd: '' })
+  assert.deepEqual(s.readDetails(''), { title: '', model: '', contextTokens: 0, cwd: '' })
 })
 
 test('model names, token counts and ages read like a person wrote them', () => {
@@ -78,6 +78,78 @@ test('the owning window is the one whose folder holds the session, deepest match
   assert.equal(s.ownerOf('/work/other', join(d, 'links')).pid, 1)
   assert.equal(s.ownerOf('/elsewhere', join(d, 'links')), null)
   assert.equal(s.windowName(s.ownerOf('/work/planner', join(d, 'links'))), 'team')
+})
+
+/* -------------------------------------------- liveness from the transcript */
+
+const secs = (ms) => ms / 1000
+function transcript(path, ageMs, cwd = '/work/app') {
+  writeFileSync(path, JSON.stringify({ type: 'user', cwd }) + '\n' + JSON.stringify({ type: 'ai-title', aiTitle: 'T' }) + '\n')
+  utimesSync(path, secs(NOW - ageMs), secs(NOW - ageMs))
+}
+
+test('"running" with a transcript quiet for ten minutes was interrupted, and is not shown', () => {
+  const d = dir(); const t = join(d, 't.jsonl')
+  transcript(t, 11 * 60_000)
+  put(d, 'x', { state: 'running', at: NOW - 30 * 60_000, transcript: t })
+  assert.deepEqual(s.readSessions(d, '', NOW), [])
+})
+
+test('an old prompt still counts as running while the transcript keeps being written', () => {
+  const d = dir(); const t = join(d, 't.jsonl')
+  transcript(t, 60_000)
+  put(d, 'x', { state: 'running', at: NOW - 30 * 60_000, transcript: t })
+  assert.deepEqual(s.readSessions(d, '', NOW).map((x) => x.session), ['x'])
+})
+
+test('housekeeping lines written just after a turn ends do not bring it back', () => {
+  const d = dir(); const t = join(d, 't.jsonl')
+  transcript(t, 50_000)
+  put(d, 'x', { state: 'done', at: NOW - 60_000, transcript: t }) // written 10 s after Stop
+  assert.deepEqual(s.readSessions(d, '', NOW), [])
+})
+
+test('a finished session writing again well after its turn ended is running again', () => {
+  const d = dir(); const t = join(d, 't.jsonl')
+  transcript(t, 20_000)
+  put(d, 'x', { state: 'done', at: NOW - 10 * 60_000, transcript: t })
+  const got = s.readSessions(d, '', NOW)
+  assert.equal(got.length, 1); assert.equal(got[0].state, 'running')
+})
+
+test('waiting stays waiting however quiet the transcript is', () => {
+  const d = dir(); const t = join(d, 't.jsonl')
+  transcript(t, 60 * 60_000)
+  put(d, 'x', { state: 'waiting', at: NOW - 60 * 60_000, transcript: t })
+  assert.deepEqual(s.readSessions(d, '', NOW).map((x) => x.state), ['waiting'])
+})
+
+test('a session no hook has told us about is found by its transcript being written', () => {
+  const d = dir(); const projects = join(d, 'projects')
+  const A = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee'
+  const B = 'bbbbbbbb-bbbb-4ccc-8ddd-eeeeeeeeeeee'
+  mkdirSync(join(projects, '-work-app', A, 'subagents'), { recursive: true })
+  transcript(join(projects, '-work-app', `${A}.jsonl`), 30_000, '/work/app/packages/ui')
+  transcript(join(projects, '-work-app', `${B}.jsonl`), 5 * 60_000)
+  transcript(join(projects, '-work-app', A, 'subagents', 'agent-1.jsonl'), 1000) // a subagent's own
+  transcript(join(projects, '-work-app', 'not-a-session.jsonl'), 1000)
+  const got = s.readSessions(join(d, 'registry'), projects, NOW)
+  assert.deepEqual(got.map((x) => x.session), [A])
+  assert.equal(got[0].state, 'running')
+  assert.equal(got[0].cwd, '/work/app/packages/ui')
+  assert.equal(got[0].project, 'ui')
+})
+
+test('a session the registry knows is not listed twice when its transcript is fresh', () => {
+  const d = dir(); const projects = join(d, 'projects')
+  const A = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee'
+  mkdirSync(join(projects, '-work-app'), { recursive: true })
+  const t = join(projects, '-work-app', `${A}.jsonl`)
+  transcript(t, 10_000)
+  mkdirSync(join(d, 'registry'))
+  put(join(d, 'registry'), A, { state: 'waiting', at: NOW - 5_000, transcript: t, message: 'permission' })
+  const got = s.readSessions(join(d, 'registry'), projects, NOW)
+  assert.equal(got.length, 1); assert.equal(got[0].state, 'waiting')
 })
 
 console.log(`\n${n} passed`)

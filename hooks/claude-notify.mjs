@@ -258,9 +258,9 @@ function editorLinks() {
 
 /**
  * The window that owns a session is the one whose workspace holds the session's folder.
- * With several windows open, sending to any other one would focus — or worse, open a
- * duplicate of — the session in a window the user is not looking at. When no workspace
- * holds it, fall back to the window used last.
+ * There is deliberately no fallback: a window that does not hold the session's project
+ * cannot find its transcript, and asking it to open the session shows an empty Claude
+ * tab. No owner means no window has it open — better to say so than to guess.
  */
 function ownerLink(cwd) {
   const links = editorLinks()
@@ -277,7 +277,7 @@ function ownerLink(cwd) {
       }
     }
   }
-  return best || links[0]
+  return best
 }
 
 /**
@@ -332,17 +332,25 @@ function postToEditor(link, path, body, timeoutMs) {
  * click only raises a confirmation prompt. So the link is the fallback, not the path.
  */
 async function focusOrOpen(o) {
+  // With the extension running, only the owning window may take the click. The bare
+  // vscode:// link is kept for when the extension is not installed at all.
+  const extensionPresent = editorLinks().length > 0
   const link = ownerLink(o.cwd)
+  if (extensionPresent && !link) {
+    debug(`focus session=${o.sessionId}: no window has ${o.cwd} open`)
+    return 'no-window'
+  }
   if (link && UUID.test(String(o.sessionId))) {
     raiseWindow(link)
     const ok = await postToEditor(link, '/focus', { session: o.sessionId }, 1500)
     debug(`focus session=${o.sessionId} window=${link.pid} ok=${ok}`)
     if (ok) {
       markSeen(o.sessionId)
-      return
+      return 'focused'
     }
   }
   if (o.uri) openUri(o.uri)
+  return 'link'
 }
 
 /* ----------------------------------------------------------- notification */
@@ -523,7 +531,16 @@ function present(o) {
       return
     }
     const answer = out.trim()
-    if (o.uri && !RESOLVED_WITHOUT_CLICK.has(answer)) focusOrOpen(o)
+    if (o.uri && !RESOLVED_WITHOUT_CLICK.has(answer)) {
+      focusOrOpen(o).then((outcome) => {
+        // A click on a session no window has open: open its project, so the click lands
+        // somewhere real rather than nowhere.
+        if (outcome === 'no-window' && o.cwd && existsSync(o.cwd) && platform() === 'darwin') {
+          const app = (editorLinks()[0] || {}).appName || 'Visual Studio Code'
+          spawnSync('open', ['-a', app, o.cwd], { stdio: 'ignore' })
+        }
+      })
+    }
   })
 }
 
@@ -559,7 +576,20 @@ function recordSession(event, data) {
   if (!id || !UUID.test(String(id))) return
   const path = sessionPath(id)
   if (event === 'Stop' || event === 'StopFailure') {
-    try { unlinkSync(path) } catch {}
+    // Kept, not deleted: Claude Code appends a few housekeeping lines to the transcript
+    // just after a turn ends, and without this mark that write would read as a new turn.
+    const prev = readJsonFile(path) || {}
+    const cwd = String(data.cwd || prev.cwd || '')
+    writeState(path, JSON.stringify({
+      ...prev,
+      session: id,
+      state: 'done',
+      message: '',
+      cwd,
+      project: prev.project || basename(cwd.replace(/[/\\]+$/, '')) || cwd,
+      transcript: String(data.transcript_path || prev.transcript || ''),
+      at: Date.now(),
+    }))
     return
   }
   if (event !== 'UserPromptSubmit' && event !== 'Notification') return
@@ -747,11 +777,12 @@ function main() {
     const cfg = loadConfig()
     if (cfg.debug) debugOn = true
     const entry = readJsonFile(sessionPath(arg)) || {}
+    const cwd = process.argv[4] || entry.cwd || ''
     return focusOrOpen({
       sessionId: arg,
-      cwd: entry.cwd || '',
+      cwd,
       uri: UUID.test(String(arg)) ? `${cfg.uriScheme}://${cfg.extensionId}/open?session=${arg}` : '',
-    })
+    }).then((outcome) => { process.stdout.write(`${outcome}\n`) })
   }
   if (mode === '--doctor') {
     doctor()
