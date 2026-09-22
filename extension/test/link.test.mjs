@@ -88,5 +88,20 @@ assert.equal(entry(A).state, 'done')
 assert.equal(entry(A).cwd, '/work/app/packages/ui')
 ok('Stop marks where the turn ended, so housekeeping writes after it are not mistaken for work')
 
+// The case that opened new windows: started in one repository, working in another.
+const C = 'cccccccc-dddd-4eee-8fff-000000000000'
+const t = join(home, 'c.jsonl')
+writeFileSync(t, JSON.stringify({ type: 'user', cwd: '/work/planner' }) + '\n' + JSON.stringify({ type: 'user', cwd: '/work/iss' }) + '\n')
+await hook({ hook_event_name: 'UserPromptSubmit', session_id: C, cwd: '/work/iss', transcript_path: t })
+assert.equal(entry(C).root, '/work/planner')
+assert.equal(entry(C).project, 'planner')
+assert.equal(entry(C).cwd, '/work/iss')
+ok('a session remembers where it was started, even after moving to another repository')
+
+const before = b.got.length
+assert.equal(await run(['--focus', C]), 'focused')
+assert.equal(b.got.length, before + 1)
+ok('so a click reaches the window it was started in, not a window for where it is now')
+
 for (const w of [a, b, dead]) w.close()
 console.log(`\n${n} passed`)

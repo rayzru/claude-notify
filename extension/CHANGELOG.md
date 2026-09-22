@@ -15,4 +15,6 @@ First release.
   uninstall.
 - Works with several VS Code windows open: each session is routed to the window whose
   workspace holds it, and a click brings that window to the front.
+- A session is matched to the window it was started in, even after it moves on to another
+  repository.
 - A notification dismissed without an answer no longer leaves a process waiting forever.

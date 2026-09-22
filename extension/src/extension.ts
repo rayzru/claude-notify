@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { mkdirSync, rmSync, watch, writeFileSync, type FSWatcher } from 'node:fs'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import * as vscode from 'vscode'
 import {
@@ -79,9 +79,15 @@ function refreshStatusBar(): void {
   statusBar.show()
 }
 
+/** "work-planner · now in ISS": started in one repository, working in another. */
+function movedTo(s: Session): string {
+  if (!s.cwd || !s.root || s.cwd === s.root || s.cwd.startsWith(s.root + '/')) return ''
+  return ` · now in ${basename(s.cwd)}`
+}
+
 /** The window a session lives in, as the list shows it. */
 function whereLabel(s: Session): string {
-  const owner = ownerOf(s.cwd, linksDir(HOME))
+  const owner = ownerOf(s.root || s.cwd, linksDir(HOME))
   if (!owner) return 'no open window'
   if (owner.pid === process.pid) return 'this window'
   return `window: ${windowName(owner)}`
@@ -103,10 +109,10 @@ async function showSessions(context: vscode.ExtensionContext): Promise<void> {
     const where = whereLabel(s)
     return {
       label: `${s.state === 'waiting' ? '$(bell-dot)' : '$(sync~spin)'} ${d.title || s.project}`,
-      description: `${s.state === 'waiting' ? 'waiting for you' : 'running'} ${ago(s.at)} · ${s.project} · ${where}`,
+      description: `${s.state === 'waiting' ? 'waiting for you' : 'running'} ${ago(s.at)} · ${s.project}${movedTo(s)} · ${where}`,
       detail: s.state === 'waiting' && s.message ? `${s.message}${facts ? ` — ${facts}` : ''}` : facts,
       id: s.session,
-      cwd: s.cwd,
+      root: s.root || s.cwd,
       title: d.title || s.project,
       open: where !== 'no open window',
     }
@@ -122,13 +128,13 @@ async function showSessions(context: vscode.ExtensionContext): Promise<void> {
     const openFolder = 'Open its folder in a new window'
     const answer = await vscode.window.showInformationMessage(
       `"${pick.title}" is not open in any VS Code window.`, openFolder)
-    if (answer === openFolder && pick.cwd) {
-      await vscode.commands.executeCommand('vscode.openFolder', vscode.Uri.file(pick.cwd), { forceNewWindow: true })
+    if (answer === openFolder && pick.root) {
+      await vscode.commands.executeCommand('vscode.openFolder', vscode.Uri.file(pick.root), { forceNewWindow: true })
     }
     return
   }
   // The notifier routes it: raises the owning window, then asks that window to focus it.
-  await runNotifier(context, ['--focus', pick.id, pick.cwd])
+  await runNotifier(context, ['--focus', pick.id, pick.root])
   refreshStatusBar()
 }
 

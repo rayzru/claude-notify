@@ -27,7 +27,7 @@
 
 import { spawn, spawnSync } from 'node:child_process'
 import { request } from 'node:http'
-import { appendFileSync, existsSync, mkdirSync, readFileSync, readdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
+import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, readSync, readdirSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -126,10 +126,12 @@ function loadConfig() {
 
 /* -------------------------------------------------------------- languages */
 
-/** The session runs under the editor extension, not in a bare terminal. */
+/**
+ * The session runs in the Claude Code extension's own tab. Not VSCODE_PID: every process
+ * started from VS Code's integrated terminal carries that, and such a session has no tab.
+ */
 function runsInEditor() {
-  const entry = process.env.CLAUDE_CODE_ENTRYPOINT || ''
-  return entry.includes('vscode') || Boolean(process.env.VSCODE_PID)
+  return (process.env.CLAUDE_CODE_ENTRYPOINT || '').includes('vscode')
 }
 
 /** VSCode hands its live UI language to every process it spawns. */
@@ -335,9 +337,10 @@ async function focusOrOpen(o) {
   // With the extension running, only the owning window may take the click. The bare
   // vscode:// link is kept for when the extension is not installed at all.
   const extensionPresent = editorLinks().length > 0
-  const link = ownerLink(o.cwd)
+  const where = o.root || o.cwd
+  const link = ownerLink(where)
   if (extensionPresent && !link) {
-    debug(`focus session=${o.sessionId}: no window has ${o.cwd} open`)
+    debug(`focus session=${o.sessionId}: no window has ${where} open`)
     return 'no-window'
   }
   if (link && UUID.test(String(o.sessionId))) {
@@ -532,14 +535,10 @@ function present(o) {
     }
     const answer = out.trim()
     if (o.uri && !RESOLVED_WITHOUT_CLICK.has(answer)) {
-      focusOrOpen(o).then((outcome) => {
-        // A click on a session no window has open: open its project, so the click lands
-        // somewhere real rather than nowhere.
-        if (outcome === 'no-window' && o.cwd && existsSync(o.cwd) && platform() === 'darwin') {
-          const app = (editorLinks()[0] || {}).appName || 'Visual Studio Code'
-          spawnSync('open', ['-a', app, o.cwd], { stdio: 'ignore' })
-        }
-      })
+      // No window of its own: do nothing rather than guess. "No window" can also mean a
+      // window whose extension is between restarts, and opening a folder then spawns a
+      // second window of a project that is already open.
+      focusOrOpen(o)
     }
   })
 }
@@ -566,6 +565,39 @@ function spawnPresenter(o) {
 const sessionPath = (id) => join(SESSIONS_DIR, `${safeId(id)}.json`)
 
 /**
+ * Where the session was started, which is where its tab lives. The hook reports the
+ * current directory instead, and a session that has moved on to another repository
+ * reports that one — a window that does not hold it would open the session empty.
+ * Claude Code writes the starting directory into the transcript's first records.
+ */
+function readRoot(transcriptPath) {
+  if (!transcriptPath) return ''
+  let fd
+  try {
+    fd = openSync(transcriptPath, 'r')
+    const buf = Buffer.alloc(64 * 1024)
+    const length = readSync(fd, buf, 0, buf.length, 0)
+    for (const line of buf.toString('utf8', 0, length).split('\n')) {
+      if (!line.includes('"cwd"')) continue
+      try {
+        const record = JSON.parse(line)
+        if (typeof record.cwd === 'string' && record.cwd) return record.cwd
+      } catch {} // the last line may be cut
+    }
+  } catch {
+  } finally {
+    if (fd !== undefined) try { closeSync(fd) } catch {}
+  }
+  return ''
+}
+
+/** The registry knows it once recorded; otherwise read it from the transcript. */
+function sessionRoot(id, transcriptPath, fallback) {
+  const entry = readJsonFile(sessionPath(id)) || {}
+  return entry.root || readRoot(transcriptPath || entry.transcript) || fallback || ''
+}
+
+/**
  * Every window's status bar lists every active session, so the list lives on disk
  * rather than in one window's memory — it also survives a window reload that way.
  * Only the state goes here; title and context size are read fresh from the
@@ -580,13 +612,15 @@ function recordSession(event, data) {
     // just after a turn ends, and without this mark that write would read as a new turn.
     const prev = readJsonFile(path) || {}
     const cwd = String(data.cwd || prev.cwd || '')
+    const root = prev.root || readRoot(data.transcript_path) || cwd
     writeState(path, JSON.stringify({
       ...prev,
       session: id,
       state: 'done',
       message: '',
       cwd,
-      project: prev.project || basename(cwd.replace(/[/\\]+$/, '')) || cwd,
+      root,
+      project: basename(root.replace(/[/\\]+$/, '')) || root,
       transcript: String(data.transcript_path || prev.transcript || ''),
       at: Date.now(),
     }))
@@ -594,12 +628,14 @@ function recordSession(event, data) {
   }
   if (event !== 'UserPromptSubmit' && event !== 'Notification') return
   const cwd = String(data.cwd || '')
+  const root = sessionRoot(id, data.transcript_path, cwd)
   writeState(path, JSON.stringify({
     session: id,
     state: event === 'Notification' ? 'waiting' : 'running',
     message: event === 'Notification' ? String(data.message || '') : '',
     cwd,
-    project: basename(cwd.replace(/[/\\]+$/, '')) || cwd,
+    root,
+    project: basename(root.replace(/[/\\]+$/, '')) || root,
     transcript: String(data.transcript_path || ''),
     at: Date.now(),
   }))
@@ -640,7 +676,7 @@ function readStdinJson() {
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
-function compose(cfg, lang, { sessionId, lane, message, soundKey, cwd }) {
+function compose(cfg, lang, { sessionId, lane, message, soundKey, cwd, root }) {
   const group = cfg.groupPerSession ? `claude-${safeId(sessionId)}` : `claude-${safeId(sessionId)}-${Date.now()}`
   const wantsClick = cfg.click === 'focusSession' || (cfg.click === 'auto' && runsInEditor())
   const uri = wantsClick && UUID.test(String(sessionId))
@@ -659,6 +695,7 @@ function compose(cfg, lang, { sessionId, lane, message, soundKey, cwd }) {
     uri,
     sessionId,
     cwd: cwd || '',
+    root: root || '',
     debug: Boolean(cfg.debug),
   }
 }
@@ -697,7 +734,7 @@ async function hookMode() {
 
   if (event === 'Notification') {
     if (!cfg.events.waitingInput) return
-    notify(cfg, { sessionId, lane, cwd: data.cwd, message: data.message || t(lang, 'waiting'), soundKey: 'waiting' })
+    notify(cfg, { sessionId, lane, cwd: data.cwd, root: sessionRoot(sessionId, data.transcript_path, data.cwd), message: data.message || t(lang, 'waiting'), soundKey: 'waiting' })
     return
   }
 
@@ -712,7 +749,7 @@ async function hookMode() {
 
   if (event === 'StopFailure') {
     if (!cfg.events.error) return
-    notify(cfg, { sessionId, lane, cwd: data.cwd, message: t(lang, 'error'), soundKey: 'error' })
+    notify(cfg, { sessionId, lane, cwd: data.cwd, root: sessionRoot(sessionId, data.transcript_path, data.cwd), message: t(lang, 'error'), soundKey: 'error' })
     return
   }
 
@@ -722,7 +759,7 @@ async function hookMode() {
   const message = elapsed === null
     ? t(lang, 'done')
     : t(lang, 'doneIn', { n: Math.max(1, Math.round(elapsed / 60)) })
-  notify(cfg, { sessionId, lane, cwd: data.cwd, message, soundKey: 'done' })
+  notify(cfg, { sessionId, lane, cwd: data.cwd, root: sessionRoot(sessionId, data.transcript_path, data.cwd), message, soundKey: 'done' })
 }
 
 /* --------------------------------------------------------------- entry */
@@ -781,6 +818,7 @@ function main() {
     return focusOrOpen({
       sessionId: arg,
       cwd,
+      root: entry.root || process.argv[4] || '',
       uri: UUID.test(String(arg)) ? `${cfg.uriScheme}://${cfg.extensionId}/open?session=${arg}` : '',
     }).then((outcome) => { process.stdout.write(`${outcome}\n`) })
   }

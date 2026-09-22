@@ -152,4 +152,27 @@ test('a session the registry knows is not listed twice when its transcript is fr
   assert.equal(got.length, 1); assert.equal(got[0].state, 'waiting')
 })
 
+test('the starting folder comes from the head of the transcript, the current one from its tail', () => {
+  const d = dir(); const projects = join(d, 'projects')
+  const A = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee'
+  mkdirSync(join(projects, '-work-planner'), { recursive: true })
+  const t = join(projects, '-work-planner', `${A}.jsonl`)
+  writeFileSync(t, [
+    JSON.stringify({ type: 'user', cwd: '/work/planner' }),
+    JSON.stringify({ type: 'user', cwd: '/work/iss' }),
+  ].join('\n') + '\n')
+  utimesSync(t, secs(NOW - 5000), secs(NOW - 5000))
+  assert.equal(s.readRoot(t), '/work/planner')
+  const [got] = s.readSessions(join(d, 'registry'), projects, NOW)
+  assert.equal(got.root, '/work/planner'); assert.equal(got.cwd, '/work/iss'); assert.equal(got.project, 'planner')
+})
+
+test('an entry written before the starting folder was recorded gets it from the transcript', () => {
+  const d = dir(); const t = join(d, 't.jsonl')
+  writeFileSync(t, JSON.stringify({ type: 'user', cwd: '/work/planner' }) + '\n' + JSON.stringify({ type: 'user', cwd: '/work/iss' }) + '\n')
+  put(d, 'x', { state: 'waiting', at: NOW - 1000, transcript: t, cwd: '/work/iss' })
+  const [got] = s.readSessions(d, '', NOW)
+  assert.equal(got.root, '/work/planner'); assert.equal(got.project, 'planner')
+})
+
 console.log(`\n${n} passed`)

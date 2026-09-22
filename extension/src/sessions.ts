@@ -12,7 +12,10 @@ export interface Session {
   session: string
   state: SessionState
   message: string
+  /** where it is working now — it may have moved on to another repository */
   cwd: string
+  /** where it was started, which is where its tab lives */
+  root: string
   project: string
   transcript: string
   at: number
@@ -34,6 +37,34 @@ export const STALLED_MS = 10 * 60_000
 export const AFTER_STOP_MS = 30_000
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+/**
+ * Where the session was started: Claude Code writes that directory into the transcript's
+ * first records. The window that owns the session is the one holding this directory, not
+ * the one holding wherever the session has wandered off to since.
+ */
+export function readRoot(transcript: string): string {
+  if (!transcript) return ''
+  let fd: number | undefined
+  try {
+    fd = openSync(transcript, 'r')
+    const buf = Buffer.alloc(64 * 1024)
+    const length = readSync(fd, buf, 0, buf.length, 0)
+    for (const line of buf.toString('utf8', 0, length).split('\n')) {
+      if (!line.includes('"cwd"')) continue
+      try {
+        const record = JSON.parse(line)
+        if (typeof record.cwd === 'string' && record.cwd) return record.cwd
+      } catch {} // the last line may be cut
+    }
+  } catch {
+  } finally {
+    if (fd !== undefined) try { closeSync(fd) } catch {}
+  }
+  return ''
+}
+
+const projectOf = (dir: string) => basename(dir.replace(/[/\\]+$/, '')) || dir
 
 function mtime(path: string): number {
   try { return statSync(path).mtimeMs } catch { return 0 }
@@ -82,7 +113,8 @@ export function readSessions(dir: string, projectsDir = '', now = Date.now()): S
       try { unlinkSync(path) } catch {}
       continue
     }
-    registry.set(s.session, s)
+    const root = s.root || readRoot(s.transcript) || s.cwd || ''
+    registry.set(s.session, { ...s, root, project: projectOf(root) })
   }
 
   const out: Session[] = []
@@ -107,12 +139,14 @@ export function readSessions(dir: string, projectsDir = '', now = Date.now()): S
       if (seen.has(id)) continue
       const d = readDetails(t.path)
       const cwd = d.cwd
+      const root = readRoot(t.path) || cwd
       out.push({
         session: id,
         state: 'running',
         message: '',
         cwd,
-        project: basename(cwd.replace(/[/\\]+$/, '')) || cwd,
+        root,
+        project: projectOf(root),
         transcript: t.path,
         at: t.at,
       })

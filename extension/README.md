@@ -29,13 +29,14 @@ three sessions running, you end up checking each one by hand.
   | | |
   | --- | --- |
   | **who** | the session's title, the same one Claude Code shows |
-  | **where** | its project, and whether it is in this window or which other one |
+  | **where** | the project it was started in and which window has it — plus where it is working now, if it moved on to another repository |
   | **state** | waiting for you — with what it is asking — or running, and for how long |
   | **size** | model and how much context the session is carrying |
 
   Pick one and its window comes to the front with that session open. A session that no
   window has open — started in a terminal, or in a window you closed — is listed as such,
-  and picking it offers to open its folder instead of guessing a window.
+  and picking it offers to open its folder instead of guessing a window. A notification
+  for such a session does nothing on click rather than open windows you did not ask for.
 
 ## Requirements
 
