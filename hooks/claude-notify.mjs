@@ -406,6 +406,7 @@ function buildPlan(o) {
     const notifier = o.notifierPath ?? findTerminalNotifier()
     if (notifier) {
       const args = ['-title', o.title, '-message', o.message]
+      if (o.subtitle) args.push('-subtitle', o.subtitle)
       if (o.sound) args.push('-sound', MAC_SOUNDS[o.soundKey] || 'default')
       if (o.group) args.push('-group', o.group)
       const waits = o.style === 'alert'
@@ -427,7 +428,7 @@ function buildPlan(o) {
     const sound = o.sound ? ` sound name "${MAC_SOUNDS[o.soundKey] || 'default'}"` : ''
     return {
       cmd: 'osascript',
-      args: ['-e', `display notification "${esc(o.message)}" with title "${esc(o.title)}"${sound}`],
+      args: ['-e', `display notification "${esc(o.message)}" with title "${esc(o.title)}"${o.subtitle ? ` subtitle "${esc(o.subtitle)}"` : ''}${sound}`],
       waits: false,
       degraded: 'terminal-notifier not found: no click action, banner only',
     }
@@ -591,6 +592,42 @@ function readRoot(transcriptPath) {
   return ''
 }
 
+/**
+ * The session's title — the one Claude Code shows in its tab — is appended to the
+ * transcript on every turn, so the latest sits near the end.
+ */
+function readTitle(transcriptPath) {
+  if (!transcriptPath) return ''
+  let fd
+  try {
+    fd = openSync(transcriptPath, 'r')
+    const size = statSync(transcriptPath).size
+    const length = Math.min(size, 128 * 1024)
+    const buf = Buffer.alloc(length)
+    readSync(fd, buf, 0, length, size - length)
+    let title = ''
+    for (const match of buf.toString('utf8').matchAll(/"aiTitle":"((?:[^"\\]|\\.)*)"/g)) {
+      try { title = JSON.parse(`"${match[1]}"`) } catch {}
+    }
+    return title
+  } catch {
+    return ''
+  } finally {
+    if (fd !== undefined) try { closeSync(fd) } catch {}
+  }
+}
+
+/**
+ * Claude Code sends Notification for three different things. Only two of them need you:
+ * a permission and a question. The third, idle_prompt, is "waiting for your input" some
+ * minutes after a turn ended — the same news as the Stop that already announced it, and
+ * showing it replaced that notification with a vaguer one.
+ */
+function isIdleNotice(data) {
+  if (data.notification_type) return data.notification_type === 'idle_prompt'
+  return /waiting for your input/i.test(String(data.message || '')) // older Claude Code
+}
+
 /** The registry knows it once recorded; otherwise read it from the transcript. */
 function sessionRoot(id, transcriptPath, fallback) {
   const entry = readJsonFile(sessionPath(id)) || {}
@@ -627,6 +664,7 @@ function recordSession(event, data) {
     return
   }
   if (event !== 'UserPromptSubmit' && event !== 'Notification') return
+  if (event === 'Notification' && isIdleNotice(data)) return
   const cwd = String(data.cwd || '')
   const root = sessionRoot(id, data.transcript_path, cwd)
   writeState(path, JSON.stringify({
@@ -676,14 +714,16 @@ function readStdinJson() {
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
-function compose(cfg, lang, { sessionId, lane, message, soundKey, cwd, root }) {
+function compose(cfg, lang, { sessionId, lane, message, soundKey, cwd, root, sessionTitle }) {
   const group = cfg.groupPerSession ? `claude-${safeId(sessionId)}` : `claude-${safeId(sessionId)}-${Date.now()}`
   const wantsClick = cfg.click === 'focusSession' || (cfg.click === 'auto' && runsInEditor())
   const uri = wantsClick && UUID.test(String(sessionId))
     ? `${cfg.uriScheme}://${cfg.extensionId}/open?session=${sessionId}`
     : ''
   return {
-    title: t(lang, 'title', { lane }).slice(0, 120),
+    // Several sessions in one project are told apart by their titles, not the folder.
+    title: (sessionTitle || t(lang, 'title', { lane })).slice(0, 120),
+    subtitle: sessionTitle ? t(lang, 'title', { lane }).slice(0, 120) : '',
     message: String(message).replace(/\s+/g, ' ').slice(0, 220),
     openLabel: t(lang, 'open'),
     dismissLabel: t(lang, 'dismiss'),
@@ -725,16 +765,22 @@ async function hookMode() {
 
   if (event === 'UserPromptSubmit') {
     writeState(turnPath(sessionId), Date.now())
+    // You are back in this session: whatever it announced before is old news, and an
+    // old notification left in the stack is one a click can land on by mistake.
+    killWaiting(pidPath(`claude-${safeId(sessionId)}`))
     return
   }
   if (data.agent_id) return // subagents stay silent; only the main agent reports
 
   const lang = resolveLanguage(cfg)
-  const lane = basename(String(data.cwd || process.cwd()).replace(/[/\\]+$/, '')) || 'claude'
+  // Named after where the session lives, not where it has wandered off to since.
+  const root = sessionRoot(sessionId, data.transcript_path, data.cwd)
+  const sessionTitle = readTitle(data.transcript_path)
+  const lane = basename(String(root || data.cwd || process.cwd()).replace(/[/\\]+$/, '')) || 'claude'
 
   if (event === 'Notification') {
-    if (!cfg.events.waitingInput) return
-    notify(cfg, { sessionId, lane, cwd: data.cwd, root: sessionRoot(sessionId, data.transcript_path, data.cwd), message: data.message || t(lang, 'waiting'), soundKey: 'waiting' })
+    if (!cfg.events.waitingInput || isIdleNotice(data)) return
+    notify(cfg, { sessionId, lane, cwd: data.cwd, root, sessionTitle, message: data.message || t(lang, 'waiting'), soundKey: 'waiting' })
     return
   }
 
@@ -749,7 +795,7 @@ async function hookMode() {
 
   if (event === 'StopFailure') {
     if (!cfg.events.error) return
-    notify(cfg, { sessionId, lane, cwd: data.cwd, root: sessionRoot(sessionId, data.transcript_path, data.cwd), message: t(lang, 'error'), soundKey: 'error' })
+    notify(cfg, { sessionId, lane, cwd: data.cwd, root, sessionTitle, message: t(lang, 'error'), soundKey: 'error' })
     return
   }
 
@@ -759,7 +805,7 @@ async function hookMode() {
   const message = elapsed === null
     ? t(lang, 'done')
     : t(lang, 'doneIn', { n: Math.max(1, Math.round(elapsed / 60)) })
-  notify(cfg, { sessionId, lane, cwd: data.cwd, root: sessionRoot(sessionId, data.transcript_path, data.cwd), message, soundKey: 'done' })
+  notify(cfg, { sessionId, lane, cwd: data.cwd, root, sessionTitle, message, soundKey: 'done' })
 }
 
 /* --------------------------------------------------------------- entry */

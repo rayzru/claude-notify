@@ -18,10 +18,16 @@ three sessions running, you end up checking each one by hand.
 | A session stopped with an error | *Stopped with an error* |
 | A session wants a permission or an answer | the actual request text |
 
+Each one is titled with the session's name — the one Claude Code shows on its tab — with
+the project underneath, so several sessions in one project are told apart at a glance.
+
 - **A short turn stays quiet.** If a turn took less than 45 seconds you were watching it
   arrive, so nothing fires. Adjustable.
-- **One notification per session.** A newer one replaces the older, so what is on screen
-  is the current state of each session, not a pile of history.
+- **One notification per event, and per session.** Claude Code also reports a session as
+  "waiting for your input" some minutes after a turn; that is the same news as *Done*, so it
+  is not shown again and does not light the status bar. A newer notification replaces the
+  older one, and going back to a session clears its old one — nothing stale is left in the
+  stack for a click to land on by mistake.
 - **Click to switch.** The click goes straight to that session's tab.
 - **Every session, from every window.** The status bar counts what is running and what is
   waiting across all your VS Code windows. Click it for the full list:
@@ -55,7 +61,9 @@ Two one-time prompts, both expected:
    belongs to Claude Code, and hooks are the only way it tells anyone about a session, so
    the extension asks rather than editing it quietly. Nothing else in the file changes.
    Sessions started after that will report.
-2. **macOS asks whether `terminal-notifier` may show notifications.** If it never asks,
+2. **macOS asks whether `terminal-notifier` may show notifications.** Allow it, and in
+   *System Settings → Notifications → terminal-notifier* set the style to **Persistent**
+   (called *Alerts* on older macOS): the default makes them slide away after a few seconds. If it never asks,
    macOS skipped the prompt because the tool was first run from a script — run
    *Claude Notify: Check that notifications work* and it will say what to do.
 

@@ -4,7 +4,8 @@
 
 First release.
 
-- Notifies when a Claude Code session finishes and when one is waiting for you.
+- Notifies when a Claude Code session finishes and when one is waiting for you — one
+  notification per event, titled with the session's name.
 - Clicking the notification brings that session's tab to the front, without VS Code's
   prompt for external links.
 - Every active session from every window in the status bar; click for the list — who,

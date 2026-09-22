@@ -103,5 +103,43 @@ assert.equal(await run(['--focus', C]), 'focused')
 assert.equal(b.got.length, before + 1)
 ok('so a click reaches the window it was started in, not a window for where it is now')
 
+// Claude's own "waiting for your input", minutes after a turn: the same news as Stop.
+await hook({ hook_event_name: 'Notification', session_id: C, cwd: '/work/iss', notification_type: 'idle_prompt', message: 'Claude is waiting for your input' })
+assert.equal(entry(C).state, 'running')
+await hook({ hook_event_name: 'Notification', session_id: C, cwd: '/work/iss', message: 'Claude is waiting for your input' })
+assert.equal(entry(C).state, 'running')
+ok('an idle notice does not light the bell — with or without notification_type')
+
+await hook({ hook_event_name: 'Notification', session_id: C, cwd: '/work/iss', notification_type: 'permission_prompt', message: 'Claude needs your permission to use Bash' })
+assert.equal(entry(C).state, 'waiting')
+ok('a permission prompt does')
+
+// What the notification would say, without showing one.
+const home2 = mkdtempSync(join(tmpdir(), 'cn-show-'))
+mkdirSync(join(home2, '.claude'))
+writeFileSync(join(home2, '.claude', 'claude-notify.config.json'), JSON.stringify({ enabled: true, minTurnSeconds: 0, language: 'en' }))
+const t2 = join(home2, 't.jsonl')
+writeFileSync(t2, [
+  JSON.stringify({ type: 'user', cwd: '/work/planner' }),
+  JSON.stringify({ type: 'ai-title', aiTitle: 'Old name' }),
+  JSON.stringify({ type: 'ai-title', aiTitle: 'Bildy "v2"' }), // quotes arrive escaped in the file
+].join('\n') + '\n')
+const show = (payload) => new Promise((resolve) => {
+  const p = spawn(process.execPath, [SCRIPT], { env: { ...process.env, HOME: home2, CLAUDE_NOTIFY_DRYRUN: '1', CLAUDE_CODE_ENTRYPOINT: 'claude-vscode' }, stdio: ['pipe', 'pipe', 'ignore'] })
+  let out = ''
+  p.stdout.on('data', (c) => { out += c })
+  p.on('close', () => resolve(out.trim()))
+  p.stdin.end(JSON.stringify(payload))
+})
+const D = 'dddddddd-eeee-4fff-8000-111111111111'
+const done = JSON.parse(await show({ hook_event_name: 'Stop', session_id: D, cwd: '/work/iss', transcript_path: t2 }))
+assert.equal(done.title, 'Bildy "v2"')
+assert.equal(done.subtitle, 'Claude · planner')
+assert.match(done.message, /^Done/)
+ok('the notification is titled with the session, the project goes underneath')
+
+assert.equal(await show({ hook_event_name: 'Notification', session_id: D, cwd: '/work/iss', transcript_path: t2, notification_type: 'idle_prompt', message: 'Claude is waiting for your input' }), '')
+ok('and no second one follows when Claude reports the session idle')
+
 for (const w of [a, b, dead]) w.close()
 console.log(`\n${n} passed`)
