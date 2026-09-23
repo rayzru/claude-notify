@@ -5,7 +5,8 @@
 First release.
 
 - Notifies when a Claude Code session finishes and when one is waiting for you — one
-  notification per event, titled with the session's name.
+  notification per event, titled with the session's name and carrying how the last
+  answer began.
 - Clicking the notification brings that session's tab to the front, without VS Code's
   prompt for external links.
 - Every active session from every window in the status bar; click for the list — who,
@@ -18,4 +19,5 @@ First release.
   workspace holds it, and a click brings that window to the front.
 - A session is matched to the window it was started in, even after it moves on to another
   repository.
-- A notification dismissed without an answer no longer leaves a process waiting forever.
+- A click always opens the session of the notification you clicked: the command rides inside
+  the notification instead of in a waiting process, which macOS could hand another click.

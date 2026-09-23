@@ -26,6 +26,8 @@ export interface Details {
   model: string
   contextTokens: number
   cwd: string
+  /** the opening of the model's last written answer */
+  reply: string
 }
 
 export const SESSION_TTL_MS = 3 * 3600_000
@@ -183,17 +185,24 @@ function readTail(path: string, bytes: number): { text: string; cut: boolean } {
  * even when the whole file runs to megabytes.
  */
 export function readDetails(transcript: string): Details {
-  const details: Details = { title: '', model: '', contextTokens: 0, cwd: '' }
+  const details: Details = { title: '', model: '', contextTokens: 0, cwd: '', reply: '' }
   if (!transcript || !existsSync(transcript)) return details
-  const tail = readTail(transcript, 128 * 1024)
+  const tail = readTail(transcript, 512 * 1024)
   const lines = tail.text.split('\n')
   if (tail.cut) lines.shift() // starts mid-line; a short transcript is read whole and keeps it
   for (const line of lines) {
-    if (!line.includes('"ai-title"') && !line.includes('"usage"') && !line.includes('"cwd"')) continue
+    if (!line.includes('"ai-title"') && !line.includes('"usage"') && !line.includes('"cwd"') && !line.includes('"text"')) continue
     let d: any
     try { d = JSON.parse(line) } catch { continue }
     if (typeof d.cwd === 'string' && d.cwd) details.cwd = d.cwd
     if (d.type === 'ai-title' && d.aiTitle) details.title = String(d.aiTitle)
+    if (d.type === 'assistant') {
+      const text = (d.message?.content || [])
+        .filter((part: any) => part && part.type === 'text' && part.text)
+        .map((part: any) => part.text).join(' ')
+      const plain = excerpt(text)
+      if (plain) details.reply = plain
+    }
     const usage = d.type === 'assistant' ? d.message?.usage : undefined
     if (usage) {
       // what the model had in front of it on that turn: new input plus the cached context
@@ -202,6 +211,20 @@ export function readDetails(transcript: string): Details {
     }
   }
   return details
+}
+
+/** Markdown stripped, first sentence when it fits — the same rule the notifier uses. */
+export function excerpt(text: string, limit = 140): string {
+  const plain = text
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+    .replace(/[*_`#>|]+/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+  if (plain.length <= limit) return plain
+  const sentence = plain.match(/^.{20,}?[.!?…](?=\s)/)
+  if (sentence && sentence[0].length <= limit) return sentence[0]
+  return plain.slice(0, limit - 1).replace(/\s+\S*$/, '') + '…'
 }
 
 /** claude-opus-5 → Opus 5, claude-haiku-4-5-20251001 → Haiku 4.5 */

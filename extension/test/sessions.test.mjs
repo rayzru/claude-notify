@@ -54,8 +54,8 @@ test('title, model and context come from the latest lines of the transcript', ()
 })
 
 test('a missing transcript gives empty details rather than an error', () => {
-  assert.deepEqual(s.readDetails('/nope/t.jsonl'), { title: '', model: '', contextTokens: 0, cwd: '' })
-  assert.deepEqual(s.readDetails(''), { title: '', model: '', contextTokens: 0, cwd: '' })
+  assert.deepEqual(s.readDetails('/nope/t.jsonl'), { title: '', model: '', contextTokens: 0, cwd: '', reply: '' })
+  assert.deepEqual(s.readDetails(''), { title: '', model: '', contextTokens: 0, cwd: '', reply: '' })
 })
 
 test('model names, token counts and ages read like a person wrote them', () => {
@@ -173,6 +173,22 @@ test('an entry written before the starting folder was recorded gets it from the 
   put(d, 'x', { state: 'waiting', at: NOW - 1000, transcript: t, cwd: '/work/iss' })
   const [got] = s.readSessions(d, '', NOW)
   assert.equal(got.root, '/work/planner'); assert.equal(got.project, 'planner')
+})
+
+test('the list shows how the last answer began', () => {
+  const d = dir(); const t = join(d, 't.jsonl')
+  writeFileSync(t, [
+    JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'An older answer.' }] } }),
+    JSON.stringify({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Bash' }] } }),
+    JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'Listener is up and **waiting** for the webhook — nothing to do until it fires.' }] } }),
+  ].join('\n') + '\n')
+  assert.equal(s.readDetails(t).reply, 'Listener is up and waiting for the webhook — nothing to do until it fires.')
+})
+
+test('a long answer is cut at its first sentence, or at a word with an ellipsis', () => {
+  assert.equal(s.excerpt('Done with the migration. ' + 'x '.repeat(200)), 'Done with the migration.')
+  const cut = s.excerpt('word '.repeat(100))
+  assert.ok(cut.endsWith('…') && cut.length <= 140)
 })
 
 console.log(`\n${n} passed`)

@@ -19,7 +19,8 @@ three sessions running, you end up checking each one by hand.
 | A session wants a permission or an answer | the actual request text |
 
 Each one is titled with the session's name — the one Claude Code shows on its tab — with
-the project underneath, so several sessions in one project are told apart at a glance.
+the project underneath, and carries how the model's last answer began: *Done · 12 min — Fixed
+the flaky test and pushed the branch.* Enough to know what happened without switching.
 
 - **A short turn stays quiet.** If a turn took less than 45 seconds you were watching it
   arrive, so nothing fires. Adjustable.
@@ -92,7 +93,10 @@ Two one-time prompts, both expected:
 ## How it works
 
 Claude Code runs a small script on four events. The script times the turn, decides
-whether it is worth a notification, and shows one through `terminal-notifier`. An
+whether it is worth a notification, and shows one through `terminal-notifier`. The command a
+click should run is stored inside that notification, and nothing stays behind waiting for an
+answer: macOS hands a click to any running copy of the same app, so a waiting process per
+notification ends up answering clicks meant for another one. An
 extension cannot show a system notification itself — VS Code has no API for it — which is
 why the script does that part.
 

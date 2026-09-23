@@ -110,7 +110,8 @@ async function showSessions(context: vscode.ExtensionContext): Promise<void> {
     return {
       label: `${s.state === 'waiting' ? '$(bell-dot)' : '$(sync~spin)'} ${d.title || s.project}`,
       description: `${s.state === 'waiting' ? 'waiting for you' : 'running'} ${ago(s.at)} · ${s.project}${movedTo(s)} · ${where}`,
-      detail: s.state === 'waiting' && s.message ? `${s.message}${facts ? ` — ${facts}` : ''}` : facts,
+      // What it is asking, or else how its last answer began — enough to recognise it.
+      detail: [s.state === 'waiting' && s.message ? s.message : d.reply, facts].filter(Boolean).join(' — '),
       id: s.session,
       root: s.root || s.cwd,
       title: d.title || s.project,

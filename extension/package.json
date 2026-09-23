@@ -93,7 +93,7 @@
             "Stays until you answer it",
             "Fades out on its own"
           ],
-          "description": "How long a notification stays on screen."
+          "description": "Linux and Windows only. On macOS how long a notification stays is set in System Settings → Notifications → terminal-notifier (Persistent keeps it until you act)."
         },
         "claudeNotify.sound": {
           "type": "boolean",

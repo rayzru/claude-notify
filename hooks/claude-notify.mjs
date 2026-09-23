@@ -409,20 +409,16 @@ function buildPlan(o) {
       if (o.subtitle) args.push('-subtitle', o.subtitle)
       if (o.sound) args.push('-sound', MAC_SOUNDS[o.soundKey] || 'default')
       if (o.group) args.push('-group', o.group)
-      const waits = o.style === 'alert'
-      if (waits) {
-        // -action forces alert style: the notification waits instead of fading.
-        // Never add -open next to it. Both are click handlers: terminal-notifier
-        // reports the click and exits, the presenter opens the URI itself, and
-        // macOS separately tries to run -open through the bundle that just went
-        // away — "the application is not open anymore", or -609.
-        args.push('-action', o.openLabel)
-        if (o.waitTimeoutSeconds > 0) args.push('-timeout', String(o.waitTimeoutSeconds))
-      } else if (o.uri) {
-        // nothing waits for a banner, so the bundle handles the click on its own
-        args.push('-open', o.uri)
-      }
-      return { cmd: notifier, args, waits }
+      // The click command travels inside the notification itself, and nothing waits for
+      // an answer. The earlier design kept one waiting terminal-notifier per notification;
+      // macOS hands a click to any one of them — they are all the same app — and
+      // terminal-notifier does not check whose notification it was, so a fresh click was
+      // answered by a 26-minute-old process and took you to the wrong session. With the
+      // command stored per notification there is nothing left to mix up. How long it
+      // stays on screen is macOS's call: Notifications → terminal-notifier → Persistent.
+      if (o.focusCommand) args.push('-execute', o.focusCommand)
+      else if (o.uri) args.push('-open', o.uri)
+      return { cmd: notifier, args, waits: false }
     }
     const esc = (s) => String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"')
     const sound = o.sound ? ` sound name "${MAC_SOUNDS[o.soundKey] || 'default'}"` : ''
@@ -606,7 +602,7 @@ function readTitle(transcriptPath) {
     const buf = Buffer.alloc(length)
     readSync(fd, buf, 0, length, size - length)
     let title = ''
-    for (const match of buf.toString('utf8').matchAll(/"aiTitle":"((?:[^"\\]|\\.)*)"/g)) {
+    for (const match of buf.toString('utf8').matchAll(/"aiTitle"\s*:\s*"((?:[^"\\]|\\.)*)"/g)) {
       try { title = JSON.parse(`"${match[1]}"`) } catch {}
     }
     return title
@@ -700,6 +696,63 @@ function markSeen(sessionId) {
   writeState(path, JSON.stringify({ ...entry, state: 'running', message: '', at: Date.now() }))
 }
 
+/** Single-quoted for /bin/sh, which is what runs an -execute command. */
+const shellQuote = (value) => `'${String(value).replace(/'/g, `'\\''`)}'`
+
+/**
+ * What a click runs. It may run long after this hook has exited — after a plugin update
+ * even — so it names a node binary and a script that will still be there: the copy the
+ * VS Code extension keeps at a fixed path when present, this file otherwise.
+ */
+function focusCommandFor(sessionId, root) {
+  const stable = join(homedir(), '.claude', 'claude-notify', 'claude-notify.mjs')
+  const script = existsSync(stable) ? stable : SELF
+  return [process.execPath, script, '--focus', sessionId, root || ''].map(shellQuote).join(' ')
+}
+
+/**
+ * The opening of the model's last written answer — enough to recognise the session
+ * from the notification without switching to it. Markdown is stripped; the first
+ * sentence is kept when it fits.
+ */
+function readLastReply(transcriptPath, limit = 140) {
+  if (!transcriptPath) return ''
+  let fd
+  try {
+    fd = openSync(transcriptPath, 'r')
+    const size = statSync(transcriptPath).size
+    const length = Math.min(size, 512 * 1024)
+    const buf = Buffer.alloc(length)
+    readSync(fd, buf, 0, length, size - length)
+    const lines = buf.toString('utf8').split('\n')
+    if (size > length) lines.shift() // starts mid-line
+    for (let i = lines.length - 1; i >= 0; i--) {
+      if (!lines[i].includes('"assistant"') || !lines[i].includes('"text"')) continue
+      let record
+      try { record = JSON.parse(lines[i]) } catch { continue }
+      if (record.type !== 'assistant') continue
+      const text = (record.message?.content || [])
+        .filter((part) => part && part.type === 'text' && part.text)
+        .map((part) => part.text).join(' ')
+      const plain = text
+        .replace(/```[\s\S]*?```/g, ' ')
+        .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+        .replace(/[*_`#>|]+/g, '')
+        .replace(/\s+/g, ' ')
+        .trim()
+      if (!plain) continue
+      if (plain.length <= limit) return plain
+      const sentence = plain.match(/^.{20,}?[.!?…](?=\s)/)
+      if (sentence && sentence[0].length <= limit) return sentence[0]
+      return plain.slice(0, limit - 1).replace(/\s+\S*$/, '') + '…'
+    }
+  } catch {
+  } finally {
+    if (fd !== undefined) try { closeSync(fd) } catch {}
+  }
+  return ''
+}
+
 /* ------------------------------------------------------------- hook logic */
 
 function readStdinJson() {
@@ -720,11 +773,12 @@ function compose(cfg, lang, { sessionId, lane, message, soundKey, cwd, root, ses
   const uri = wantsClick && UUID.test(String(sessionId))
     ? `${cfg.uriScheme}://${cfg.extensionId}/open?session=${sessionId}`
     : ''
+  const focusCommand = uri ? focusCommandFor(sessionId, root || cwd) : ''
   return {
     // Several sessions in one project are told apart by their titles, not the folder.
     title: (sessionTitle || t(lang, 'title', { lane })).slice(0, 120),
     subtitle: sessionTitle ? t(lang, 'title', { lane }).slice(0, 120) : '',
-    message: String(message).replace(/\s+/g, ' ').slice(0, 220),
+    message: String(message).replace(/\s+/g, ' ').slice(0, 240),
     openLabel: t(lang, 'open'),
     dismissLabel: t(lang, 'dismiss'),
     soundKey,
@@ -733,6 +787,7 @@ function compose(cfg, lang, { sessionId, lane, message, soundKey, cwd, root, ses
     waitTimeoutSeconds: cfg.waitTimeoutSeconds,
     group,
     uri,
+    focusCommand,
     sessionId,
     cwd: cwd || '',
     root: root || '',
@@ -802,9 +857,11 @@ async function hookMode() {
   if (!cfg.events.done) return
   // a short turn is one you watched happen: stay quiet
   if (elapsed !== null && elapsed < cfg.minTurnSeconds) return
-  const message = elapsed === null
+  const status = elapsed === null
     ? t(lang, 'done')
     : t(lang, 'doneIn', { n: Math.max(1, Math.round(elapsed / 60)) })
+  const reply = readLastReply(data.transcript_path)
+  const message = reply ? `${status} — ${reply}` : status
   notify(cfg, { sessionId, lane, cwd: data.cwd, root, sessionTitle, message, soundKey: 'done' })
 }
 
@@ -974,9 +1031,12 @@ function doctor() {
         fail('macOS denies notifications to terminal-notifier — launch its .app bundle once via `open -a` to get the prompt')
       } else {
         ok(`terminal-notifier at ${notifier}`)
-        const orphans = orphanGroups(notifier)
-        if (orphans.length) warn(`${orphans.length} notification(s) with no live owner — clicking one raises -609; clear with \`terminal-notifier -remove ALL\``)
-        else ok('no orphaned notifications')
+        // Nothing waits for a click any more — the command rides in the notification — so a
+        // notification without a process is normal. What does matter is a waiting process
+        // left over from an older version: it takes clicks meant for other notifications.
+        const waiting = spawnSync('pgrep', ['-f', 'claude-notify.mjs --show'], { encoding: 'utf8' }).stdout.trim().split('\n').filter(Boolean)
+        if (waiting.length) warn(`${waiting.length} waiting notifier process(es) from an older version — they can take clicks meant for other sessions; stop them with \`pkill -f 'claude-notify.mjs --show'\``)
+        else ok('no leftover waiting notifiers')
       }
     }
   }

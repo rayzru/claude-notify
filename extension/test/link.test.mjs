@@ -123,6 +123,10 @@ writeFileSync(t2, [
   JSON.stringify({ type: 'user', cwd: '/work/planner' }),
   JSON.stringify({ type: 'ai-title', aiTitle: 'Old name' }),
   JSON.stringify({ type: 'ai-title', aiTitle: 'Bildy "v2"' }), // quotes arrive escaped in the file
+  JSON.stringify({ type: 'assistant', message: { content: [
+    { type: 'thinking', thinking: 'not this' },
+    { type: 'text', text: '**Fixed** the flaky test in `sessions.test` and pushed the branch. Next: [review](https://x) and release.\n\n```js\ncode()\n```' },
+  ] } }),
 ].join('\n') + '\n')
 const show = (payload) => new Promise((resolve) => {
   const p = spawn(process.execPath, [SCRIPT], { env: { ...process.env, HOME: home2, CLAUDE_NOTIFY_DRYRUN: '1', CLAUDE_CODE_ENTRYPOINT: 'claude-vscode' }, stdio: ['pipe', 'pipe', 'ignore'] })
@@ -137,6 +141,23 @@ assert.equal(done.title, 'Bildy "v2"')
 assert.equal(done.subtitle, 'Claude · planner')
 assert.match(done.message, /^Done/)
 ok('the notification is titled with the session, the project goes underneath')
+
+assert.equal(done.message, 'Done — Fixed the flaky test in sessions.test and pushed the branch. Next: review and release.')
+ok('and carries how the last answer began, markdown and code stripped')
+
+const plan = await new Promise((resolve) => {
+  const p = spawn(process.execPath, [SCRIPT, '--show', JSON.stringify({ ...done, sound: true })], { env: { ...process.env, HOME: home2, CLAUDE_NOTIFY_DRYRUN: '1', CLAUDE_NOTIFY_PLATFORM: 'darwin' }, stdio: ['ignore', 'pipe', 'ignore'] })
+  let out = ''
+  p.stdout.on('data', (c) => { out += c })
+  p.on('close', () => resolve(JSON.parse(out)))
+})
+if (plan.cmd.includes('terminal-notifier')) {
+  assert.equal(plan.waits, false)
+  assert.equal(plan.args.includes('-action'), false)
+  const cmd = plan.args[plan.args.indexOf('-execute') + 1]
+  assert.match(cmd, /'--focus' 'dddddddd-eeee-4fff-8000-111111111111' '\/work\/planner'$/)
+  ok('the click command travels inside the notification; nothing waits for an answer')
+}
 
 assert.equal(await show({ hook_event_name: 'Notification', session_id: D, cwd: '/work/iss', transcript_path: t2, notification_type: 'idle_prompt', message: 'Claude is waiting for your input' }), '')
 ok('and no second one follows when Claude reports the session idle')
