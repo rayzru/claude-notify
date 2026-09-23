@@ -734,6 +734,8 @@ function readLastReply(transcriptPath, limit = 140) {
       const text = (record.message?.content || [])
         .filter((part) => part && part.type === 'text' && part.text)
         .map((part) => part.text).join(' ')
+        // an answer that opens by naming its audience says nothing about what was done
+        .replace(/^\s*Written for:[^\n]*\n+/i, '')
       const plain = text
         .replace(/```[\s\S]*?```/g, ' ')
         .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')

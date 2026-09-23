@@ -216,6 +216,7 @@ export function readDetails(transcript: string): Details {
 /** Markdown stripped, first sentence when it fits — the same rule the notifier uses. */
 export function excerpt(text: string, limit = 140): string {
   const plain = text
+    .replace(/^\s*Written for:[^\n]*\n+/i, '') // names its audience, says nothing about the work
     .replace(/```[\s\S]*?```/g, ' ')
     .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
     .replace(/[*_`#>|]+/g, '')
