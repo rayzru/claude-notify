@@ -40,7 +40,9 @@ the flaky test and pushed the branch.* Enough to know what happened without swit
   | **state** | waiting for you — with what it is asking — or running, and for how long |
   | **size** | model and how much context the session is carrying |
 
-  Pick one and its window comes to the front with that session open. A session that no
+  Pick one and its window comes to the front with that session open — in its tab if it has
+  one, otherwise by switching the Claude sidebar to it when that is where you keep Claude
+  (`claudeCode.preferredLocation: "sidebar"`). It never opens a second view of a session. A session that no
   window has open — started in a terminal, or in a window you closed — is listed as such,
   and picking it offers to open its folder instead of guessing a window. A notification
   for such a session does nothing on click rather than open windows you did not ask for.

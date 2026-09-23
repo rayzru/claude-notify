@@ -19,5 +19,7 @@ First release.
   workspace holds it, and a click brings that window to the front.
 - A session is matched to the window it was started in, even after it moves on to another
   repository.
+- A click switches to the session where it already is — its tab, or the Claude sidebar —
+  instead of opening a second view of it in a new tab.
 - A click always opens the session of the notification you clicked: the command rides inside
   the notification instead of in a waiting process, which macOS could hand another click.

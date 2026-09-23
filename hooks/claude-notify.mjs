@@ -1058,6 +1058,14 @@ function doctor() {
     else ok(`VS Code trusts links to ${cfg.extensionId}`)
   }
 
+  // Where Claude Code opens a session decides what a click does: reveal its tab, or switch
+  // the sidebar to it. Left at the default, a session kept in the sidebar gets a second
+  // view in a tab instead.
+  const vscodeSettings = readJsonFile(join(homedir(), 'Library', 'Application Support', 'Code', 'User', 'settings.json'), { stripComments: true }) || {}
+  const location = vscodeSettings['claudeCode.preferredLocation'] || 'panel (default)'
+  if (location === 'sidebar') ok('Claude opens sessions in the sidebar — a click switches it to the session')
+  else say('    ', `Claude opens sessions in editor tabs (claudeCode.preferredLocation: ${location}). If you keep Claude in the sidebar, set it to "sidebar", or a click will open the session in a tab beside it`)
+
   const manual = settingsHooks()
   const ours = manual.filter((h) => h.command.includes('claude-notify'))
   const others = manual.filter((h) => !h.command.includes('claude-notify'))

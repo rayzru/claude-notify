@@ -31,7 +31,19 @@ const SESSIONS = sessionsDir(HOME)
 // Claude Code's own transcripts: a working session keeps writing to its file.
 const PROJECTS = join(HOME, '.claude', 'projects')
 const DECLINED_KEY = 'claudeNotify.hooksDeclined'
-const CLAUDE_EXTENSION_OPEN = 'claude-vscode.primaryEditor.open'
+/**
+ * The Claude Code extension's own "open this session" — the one that decides where. With
+ * `programmatic: 'honor-preferred-location'` it reveals the session's tab if it has one,
+ * otherwise switches the sidebar to it when Claude lives in the sidebar
+ * (claudeCode.preferredLocation = sidebar), and only then opens a tab. Without that flag it
+ * would quietly reset the user's preference to tabs.
+ *
+ * primaryEditor.open — what vscode:// links use — always goes to an editor tab. For a
+ * session shown in the sidebar that means a second view of it, and a second view is not a
+ * safe one: a prompt typed there has been seen to go nowhere.
+ */
+const CLAUDE_OPEN_SESSION = 'claude-vscode.editor.open'
+const CLAUDE_OPEN_IN_EDITOR = 'claude-vscode.primaryEditor.open'
 
 let server: Server | undefined
 let statusBar: vscode.StatusBarItem | undefined
@@ -156,11 +168,19 @@ function watchSessions(): void {
 
 async function focusSession(sessionId: string): Promise<boolean> {
   try {
-    await vscode.commands.executeCommand(CLAUDE_EXTENSION_OPEN, sessionId)
+    await vscode.commands.executeCommand(CLAUDE_OPEN_SESSION, sessionId, undefined, undefined, undefined, undefined,
+      { programmatic: 'honor-preferred-location' })
     return true
   } catch (err) {
-    // The command belongs to the official Claude Code extension. If it is missing or
-    // was renamed, say so rather than failing mutely.
+    log(`${CLAUDE_OPEN_SESSION} failed for ${sessionId}: ${String(err)} — trying ${CLAUDE_OPEN_IN_EDITOR}`)
+  }
+  try {
+    // An older Claude Code without the location-aware command.
+    await vscode.commands.executeCommand(CLAUDE_OPEN_IN_EDITOR, sessionId)
+    return true
+  } catch (err) {
+    // Both belong to the official Claude Code extension. If they are missing or were
+    // renamed, say so rather than failing mutely.
     log(`could not focus ${sessionId}: ${String(err)}`)
     return false
   }
