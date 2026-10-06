@@ -23,5 +23,5 @@ jobs:
       - run: npm test
       - name: The extension still packages, with its notifying app
         run: |
-          npm run package -- --target darwin-arm64 --out claude-notify.vsix
-          unzip -l claude-notify.vsix | grep -q 'notify-helper/Contents/MacOS/notify'
+          npm run package -- --target darwin-arm64 --out claude-session-notify.vsix
+          unzip -l claude-session-notify.vsix | grep -q 'notify-helper/Contents/MacOS/notify'
