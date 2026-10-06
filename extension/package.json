@@ -20,12 +20,12 @@
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/rayzru/claude-notify.git",
+    "url": "https://github.com/rayzru/claude-session-notify.git",
     "directory": "extension"
   },
-  "homepage": "https://github.com/rayzru/claude-notify/tree/main/extension#readme",
+  "homepage": "https://github.com/rayzru/claude-session-notify/tree/main/extension#readme",
   "bugs": {
-    "url": "https://github.com/rayzru/claude-notify/issues"
+    "url": "https://github.com/rayzru/claude-session-notify/issues"
   },
   "main": "./dist/extension.js",
   "activationEvents": [
@@ -230,7 +230,7 @@
   "scripts": {
     "build": "node esbuild.mjs",
     "watch": "node esbuild.mjs --watch",
-    "package": "vsce package --no-dependencies --baseImagesUrl https://github.com/rayzru/claude-notify/raw/HEAD/extension --baseContentUrl https://github.com/rayzru/claude-notify/blob/HEAD/extension",
+    "package": "vsce package --no-dependencies --baseImagesUrl https://github.com/rayzru/claude-session-notify/raw/HEAD/extension --baseContentUrl https://github.com/rayzru/claude-session-notify/blob/HEAD/extension",
     "vscode:prepublish": "npm run build",
     "vscode:uninstall": "node ./dist/uninstall.js",
     "test": "esbuild src/wiring.ts src/sessions.ts src/toast.ts --bundle --platform=node --format=esm --outdir=test/.build --out-extension:.js=.mjs --log-level=warning && node test/wiring.test.mjs && node test/sessions.test.mjs && node test/toast.test.mjs && node test/link.test.mjs"

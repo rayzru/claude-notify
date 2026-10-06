@@ -51,6 +51,6 @@ claude plugin update claude-notify@rayzru
   ```
 
   Then, on open-vsx.org under *Settings → Trusted Publishers*, trust GitHub Actions for
-  `rayzru/claude-notify`, workflow `release.yml`, and set the repository variable
+  `rayzru/claude-session-notify`, workflow `release.yml`, and set the repository variable
   `OPEN_VSX_TRUSTED` to `true` (`gh variable set OPEN_VSX_TRUSTED --body true`). From then on
   the workflow publishes without a stored token, and the access token can be deleted.
