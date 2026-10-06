@@ -55,8 +55,19 @@ jobs:
           gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1 \
             || gh release create "$GITHUB_REF_NAME" --title "$VERSION" --notes-file notes.md
           gh release upload "$GITHUB_REF_NAME" claude-session-notify-"$VERSION"-darwin-*.vsix --clobber
-      # Open VSX trusts this workflow only once a version exists and the namespace owner has
-      # registered it (RELEASING.md); the repository variable says that has happened.
+      # Open VSX trusts this workflow once the namespace owner has registered it (RELEASING.md);
+      # the repository variable says that has happened. Until then an OVSX_PAT secret will do.
+      # Neither: say so on the run, rather than leave Open VSX a version behind unnoticed.
       - name: Open VSX
-        if: vars.OPEN_VSX_TRUSTED == 'true'
-        run: npx ovsx publish --packagePath claude-session-notify-"$VERSION"-darwin-*.vsix --skip-duplicate --trusted-publishing
+        env:
+          TRUSTED: ${{ vars.OPEN_VSX_TRUSTED }}
+          OVSX_PAT: ${{ secrets.OVSX_PAT }}
+        run: |
+          packages=(claude-session-notify-"$VERSION"-darwin-*.vsix)
+          if [ "$TRUSTED" = true ]; then
+            npx ovsx publish --packagePath "${packages[@]}" --skip-duplicate --trusted-publishing
+          elif [ -n "$OVSX_PAT" ]; then
+            npx ovsx publish --packagePath "${packages[@]}" --skip-duplicate
+          else
+            echo "::warning title=Open VSX skipped::not published to Open VSX — set OPEN_VSX_TRUSTED or the OVSX_PAT secret (RELEASING.md)"
+          fi

@@ -113,6 +113,14 @@ test('detects the Claude Code plugin', () => {
   assert.equal(w.pluginInstalled(h), true)
 })
 
+test('a plugin switched off brings no hooks, so it does not count', () => {
+  const h = fresh()
+  mkdirSync(join(h, '.claude', 'plugins'), { recursive: true })
+  writeFileSync(join(h, '.claude', 'plugins', 'installed_plugins.json'), JSON.stringify({ version: 2, plugins: { 'claude-notify@rayzru': [{}] } }))
+  writeFileSync(join(h, '.claude', 'settings.json'), JSON.stringify({ enabledPlugins: { 'claude-notify@rayzru': false } }))
+  assert.equal(w.pluginInstalled(h), false)
+})
+
 test('copies the script only when it changed', () => {
   const h = fresh(); const src = join(h, 'bundled.mjs'); writeFileSync(src, '// v1')
   assert.equal(w.installScript(src, h), true)
@@ -132,15 +140,30 @@ test('config: writes our keys, keeps the rest', () => {
 })
 
 test('full removal leaves nothing behind', () => {
-  const h = fresh(); const src = join(h, 'b.mjs'); writeFileSync(src, '//')
-  w.installScript(src, h); w.wireHooks(h)
+  const h = fresh(); const tmp = fresh(); const src = join(h, 'b.mjs'); writeFileSync(src, '//')
+  w.installScript(src, h); w.wireHooks(h); w.writeRunner(h, '/no/such/editor')
+  w.writeConfig(h, { enabled: true, minTurnSeconds: 30, events: ['done'], style: 'alert', sound: true })
   writeFileSync(w.legacyLinkPath(h), '{}')
   mkdirSync(w.linksDir(h), { recursive: true }); writeFileSync(w.linkPath(h, 123), '{}')
-  assert.equal(w.removeEverything(h), 4)
-  assert.equal(existsSync(w.stableScriptPath(h)), false)
+  mkdirSync(w.sessionsDir(h), { recursive: true }); writeFileSync(join(w.sessionsDir(h), 's.json'), '{}')
+  w.setPause(h, 'all', Infinity)
+  writeFileSync(join(h, '.claude', 'claude-notify', 'debug.log'), 'history')
+  mkdirSync(w.stateDir(tmp)); writeFileSync(join(w.stateDir(tmp), 'turn-x'), '1')
+  assert.equal(w.removeEverything(h, tmp), 4)
+  assert.equal(existsSync(join(h, '.claude', 'claude-notify')), false)
   assert.equal(existsSync(w.legacyLinkPath(h)), false)
-  assert.equal(existsSync(w.linkPath(h, 123)), false)
+  assert.equal(existsSync(w.stateDir(tmp)), false)
+  assert.equal(existsSync(w.configPath(h)), false)
   assert.equal(w.hooksWired(h), false)
+})
+
+test('removal keeps the config while the claude-notify plugin still reads it', () => {
+  const h = fresh(); const tmp = fresh()
+  w.writeConfig(h, { enabled: true, minTurnSeconds: 30, events: ['done'], style: 'alert', sound: true })
+  mkdirSync(join(h, '.claude', 'plugins'), { recursive: true })
+  writeFileSync(join(h, '.claude', 'plugins', 'installed_plugins.json'), JSON.stringify({ version: 2, plugins: { 'claude-notify@rayzru': [{}] } }))
+  w.removeEverything(h, tmp)
+  assert.equal(existsSync(w.configPath(h)), true)
 })
 
 test('a pause holds until its time, or until resumed, for each scope on its own', () => {

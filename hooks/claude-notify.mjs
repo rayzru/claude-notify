@@ -96,10 +96,33 @@ const STRINGS = {
 
 /* ------------------------------------------------------------------ config */
 
+/** VS Code's settings are JSON with comments and trailing commas; strips both, strings kept. */
+function stripJsonc(raw) {
+  let out = ''
+  for (let i = 0; i < raw.length; i++) {
+    const c = raw[i]
+    if (c === '"') {
+      let j = i + 1
+      while (j < raw.length && raw[j] !== '"') j += raw[j] === '\\' ? 2 : 1
+      out += raw.slice(i, j + 1)
+      i = j
+    } else if (c === '/' && raw[i + 1] === '/') {
+      while (i < raw.length && raw[i] !== '\n') i++
+      out += '\n'
+    } else if (c === '/' && raw[i + 1] === '*') {
+      const end = raw.indexOf('*/', i + 2)
+      i = end < 0 ? raw.length : end + 1
+    } else if (c === ',' && /^\s*[}\]]/.test(raw.slice(i + 1, i + 200))) {
+      // a trailing comma: dropped
+    } else out += c
+  }
+  return out
+}
+
 function readJsonFile(path, { stripComments = false } = {}) {
   try {
     let raw = readFileSync(path, 'utf8')
-    if (stripComments) raw = raw.replace(/^\s*\/\/.*$/gm, '')
+    if (stripComments) raw = stripJsonc(raw)
     return JSON.parse(raw)
   } catch {
     return null
@@ -1055,6 +1078,26 @@ function main() {
 
 const HOOK_EVENTS = ['UserPromptSubmit', 'Stop', 'StopFailure', 'Notification']
 
+/**
+ * macOS hides every notification while the screen is mirrored, shared or recorded, unless
+ * "When mirroring or sharing the display" is on. Read through cfprefsd: the file on disk
+ * lags behind the switch. null when it cannot tell.
+ */
+function hiddenWhileSharing() {
+  if (platform() !== 'darwin') return false
+  const res = spawnSync('/bin/sh', ['-c',
+    'defaults export com.apple.ncprefs - | plutil -extract dnd_prefs raw -o - - | base64 -D | plutil -convert json -o - -',
+  ], { encoding: 'utf8' })
+  try { return JSON.parse(res.stdout).dndMirrored === true } catch { return null }
+}
+
+/** The claude-notify plugin brings its own hooks — unless it is switched off. */
+function pluginActive() {
+  const plugins = readJsonFile(join(homedir(), '.claude', 'plugins', 'installed_plugins.json'))?.plugins || {}
+  const enabled = readJsonFile(join(homedir(), '.claude', 'settings.json'))?.enabledPlugins || {}
+  return Object.keys(plugins).some((k) => k.startsWith('claude-notify@') && enabled[k] !== false)
+}
+
 /** Hooks wired by hand in settings files — the plugin's own hooks are not listed there. */
 function settingsHooks() {
   const files = [
@@ -1144,6 +1187,7 @@ function doctor() {
         ok('Notify for Claude Code may show notifications')
         const style = ((probe.stdout || '').match(/^style: (\w+)$/m) || [])[1]
         if (style === 'banner') say('    ', 'they slide away after a few seconds — for ones that stay, set System Settings → Notifications → Notify for Claude Code → Persistent')
+        if (hiddenWhileSharing()) say('    ', 'macOS hides them while the screen is shared or recorded — to see them in a call or a recording, turn on System Settings → Notifications → "When mirroring or sharing the display"')
         else if (style === 'none') warn('alerts are off for Notify for Claude Code — they only collect in Notification Centre; turn them on in System Settings → Notifications')
       } else if (status === 'notDetermined') {
         warn('Notify for Claude Code has not been allowed to notify yet — run "Notify for Claude Code: Allow notifications" in VS Code')
@@ -1200,12 +1244,19 @@ function doctor() {
   if (location === 'sidebar') ok('Claude opens sessions in the sidebar — a click switches it to the session')
   else say('    ', `Claude opens sessions in editor tabs (claudeCode.preferredLocation: ${location}). If you keep Claude in the sidebar, set it to "sidebar", or a click will open the session in a tab beside it`)
 
+  // The extension wires its hooks into settings.json, and that is the one place they
+  // belong. They double up only beside the plugin's own, or when wired twice.
   const manual = settingsHooks()
   const ours = manual.filter((h) => h.command.includes('claude-notify'))
   const others = manual.filter((h) => !h.command.includes('claude-notify'))
-  if (ours.length) {
-    fail(`claude-notify is also wired by hand in ${[...new Set(ours.map((h) => h.file))].join(', ')} — remove those entries or every notification fires twice`)
-  } else ok('no duplicate wiring in settings files')
+  const plugin = pluginActive()
+  const twice = HOOK_EVENTS.some((event) => ours.filter((h) => h.event === event).length > 1)
+  const files = [...new Set(ours.map((h) => h.file))].join(', ')
+  if (ours.length && plugin) {
+    fail(`claude-notify is wired in ${files} as well as by the claude-notify plugin — remove those entries or every notification fires twice`)
+  } else if (twice) {
+    fail(`claude-notify is wired more than once for the same event in ${files} — every notification fires twice`)
+  } else ok('no duplicate wiring')
   if (others.length) {
     const label = (cmd) => {
       const script = cmd.match(/([\w.-]+\.(?:mjs|cjs|js|py|sh|ts))/)

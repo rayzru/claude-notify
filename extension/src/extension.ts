@@ -1,14 +1,14 @@
 import { spawn } from 'node:child_process'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
-import { chmodSync, existsSync, mkdirSync, rmSync, watch, writeFileSync, type FSWatcher } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, readdirSync, rmSync, statSync, watch, writeFileSync, type FSWatcher } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import * as vscode from 'vscode'
 import {
   helperPath, hooksOutdated, hooksWired, installHelper, installScript, legacyLinkPath, linkPath,
-  linksDir, pausedUntil, pausePath, pluginInstalled, sessionsDir, setPause, unwireHooks, wireHooks,
-  writeConfig, writeRunner, type PauseScope,
+  linksDir, pausedUntil, pausePath, pluginInstalled, runnerPath, sessionsDir, setPause, stableScriptPath,
+  unwireHooks, wireHooks, writeConfig, writeRunner, type PauseScope,
 } from './wiring'
 import { ago, lastPrompted, markSeen, modelName, ownerOf, readDetails, readSessions, tokens, windowName, type Session } from './sessions'
 import { tabShowsTitle, toastFor } from './toast'
@@ -32,8 +32,12 @@ const LINK_FILE = linkPath(HOME, process.pid)
 const SESSIONS = sessionsDir(HOME)
 // Claude Code's own transcripts: a working session keeps writing to its file.
 const PROJECTS = join(HOME, '.claude', 'projects')
-const DECLINED_KEY = 'claudeNotify.hooksDeclined'
 const SETUP_SHOWN_KEY = 'claudeNotify.setupShown'
+/** When a window last said the hooks are missing: every window starts at once, one says it. */
+const REMINDED_KEY = 'claudeNotify.connectRemindedAt'
+/** How long a turn must last to be announced, as offered in the settings and the picker. */
+const QUIET_CHOICES = [15, 30, 45, 60, 90, 120]
+const QUIET_DEFAULT = 45
 const HELPER_ID = 'ru.rayz.notify-for-claude-code'
 /**
  * The Claude Code extension's own "open this session" — the one that decides where. With
@@ -57,6 +61,8 @@ let pauseWatcher: FSWatcher | undefined
 let linkInfo: { port: number; token: string } | undefined
 /** `<publisher>.<name>#setup`, from the running extension rather than written out. */
 let setupWalkthrough = ''
+/** Set on connecting: the first session to report after it proves the hooks work. */
+let connectedAt = 0
 
 function log(line: string): void {
   output?.appendLine(`${new Date().toISOString().slice(11, 19)}  ${line}`)
@@ -198,7 +204,7 @@ async function goToSession(context: vscode.ExtensionContext, session: string, ro
 }
 
 type SessionPick = vscode.QuickPickItem & { id: string; root: string; title: string }
-type ControlPick = vscode.QuickPickItem & { action?: 'pause' | 'resume' | 'setup' }
+type ControlPick = vscode.QuickPickItem & { action?: 'pause' | 'resume' | 'quiet' | 'setup' }
 
 /** Every active session: who, where, in what state, how full its context is. */
 async function showSessions(context: vscode.ExtensionContext): Promise<void> {
@@ -224,10 +230,11 @@ async function showSessions(context: vscode.ExtensionContext): Promise<void> {
   const control: ControlPick = paused
     ? { label: '$(bell) Resume notifications', description: paused, action: 'resume' }
     : { label: '$(bell-slash) Pause notifications…', action: 'pause' }
+  const quiet: ControlPick = { label: '$(watch) Announce turns longer than…', description: quietLabel(quietSeconds()), action: 'quiet' }
   const setup: ControlPick = { label: '$(gear) Set up…', description: 'connect, allow notifications, try it', action: 'setup' }
   const items: (SessionPick | ControlPick)[] = sessions.length
-    ? [...sessions, { label: '', kind: vscode.QuickPickItemKind.Separator }, control, setup]
-    : [control, setup]
+    ? [...sessions, { label: '', kind: vscode.QuickPickItemKind.Separator }, control, quiet, setup]
+    : [control, quiet, setup]
   const pick = await vscode.window.showQuickPick(items, {
     // The same mark as in the status bar, so the list is recognisably the one it opens.
     title: '✻ Claude Code sessions',
@@ -241,6 +248,7 @@ async function showSessions(context: vscode.ExtensionContext): Promise<void> {
   if (!('id' in pick)) {
     if (pick.action === 'pause') await pauseNotifications()
     else if (pick.action === 'resume') resumeNotifications()
+    else if (pick.action === 'quiet') await chooseQuietTime()
     else if (pick.action === 'setup') await openSetup()
     return
   }
@@ -251,7 +259,7 @@ function watchSessions(): void {
   let pending: NodeJS.Timeout | undefined
   const soon = () => {
     if (pending) clearTimeout(pending)
-    pending = setTimeout(refreshStatusBar, 200)
+    pending = setTimeout(() => { refreshStatusBar(); noticeFirstReport() }, 200)
   }
   try {
     mkdirSync(SESSIONS, { recursive: true })
@@ -393,7 +401,7 @@ function syncConfig(): void {
   try {
     writeConfig(HOME, {
       enabled: cfg.get<boolean>('enabled', true),
-      minTurnSeconds: cfg.get<number>('minTurnSeconds', 45),
+      minTurnSeconds: cfg.get<number>('minTurnSeconds', QUIET_DEFAULT),
       events: cfg.get<string[]>('events', ['done', 'error', 'waitingInput']),
       style: cfg.get<string>('style', 'alert'),
       sound: cfg.get<boolean>('sound', true),
@@ -403,10 +411,53 @@ function syncConfig(): void {
   }
 }
 
+/** Starts the runner the hooks call, as Claude Code will. True when the notifier ran. */
+function runnerWorks(): Promise<boolean> {
+  return new Promise((resolve) => {
+    const child = spawn(runnerPath(HOME), ['--config'], { stdio: 'ignore' })
+    child.on('close', (code) => resolve(code === 0))
+    child.on('error', () => resolve(false))
+  })
+}
+
+async function reportBrokenRunner(): Promise<void> {
+  const check = 'Check'
+  const answer = await vscode.window.showErrorMessage(
+    'Notify for Claude Code: the hooks are in place but do not start, so no session reports.', check)
+  if (answer === check) await vscode.commands.executeCommand('claudeNotify.doctor')
+}
+
+/** Wires the hooks, then starts them once to see that they run. */
+async function connect(): Promise<void> {
+  try {
+    wireHooks(HOME)
+  } catch (err) {
+    vscode.window.showErrorMessage(`Notify for Claude Code could not update ~/.claude/settings.json: ${String(err)}`)
+    return
+  }
+  await refreshSetup()
+  if (!(await runnerWorks())) return reportBrokenRunner()
+  connectedAt = Date.now()
+  vscode.window.showInformationMessage('Notify for Claude Code: connected. Every Claude session reports from its next message — open ones too. You will hear when the first one does.')
+}
+
+/** The first session to report after connecting proves the hooks work: say so, once. */
+function noticeFirstReport(): void {
+  if (!connectedAt) return
+  let names: string[] = []
+  try { names = readdirSync(SESSIONS) } catch { return }
+  const heard = names.some((name) => {
+    try { return statSync(join(SESSIONS, name)).mtimeMs >= connectedAt } catch { return false }
+  })
+  if (!heard) return
+  connectedAt = 0
+  vscode.window.showInformationMessage(`Notify for Claude Code: Claude Code just reported a session — the hooks work. A turn longer than ${quietLabel(quietSeconds())} ends with a notification.`)
+}
+
 /**
- * Claude Code only tells anyone about a session through hooks in its settings file,
- * so without them this extension hears nothing. That file is the user's, though:
- * ask once, and remember a "not now" instead of asking on every start.
+ * Claude Code only tells anyone about a session through hooks in its settings file, so
+ * without them this extension hears nothing — and looks broken. Until they are in place,
+ * every start says so, with the way to the setup page; once they are, it checks they run.
  */
 async function offerHooks(context: vscode.ExtensionContext, force = false): Promise<void> {
   // Already connected is a finished step, not a refusal: tick it on the setup page and say so.
@@ -418,40 +469,49 @@ async function offerHooks(context: vscode.ExtensionContext, force = false): Prom
   }
   if (hooksWired(HOME)) {
     await refreshSetup()
-    if (force) vscode.window.showInformationMessage('Notify for Claude Code: already connected — the hooks are in place.')
+    if (!(await runnerWorks())) return reportBrokenRunner()
+    if (force) vscode.window.showInformationMessage('Notify for Claude Code: already connected — the hooks are in place and start.')
     return
   }
-  if (force) {
-    // Asked for by name — from the command palette or the setup page — so no second question.
-    try {
-      wireHooks(HOME)
-      await context.globalState.update(DECLINED_KEY, false)
-      vscode.window.showInformationMessage('Notify for Claude Code: connected. Claude sessions started from now on will report.')
-    } catch (err) {
-      vscode.window.showErrorMessage(`Notify for Claude Code could not update ~/.claude/settings.json: ${String(err)}`)
-    }
-    await refreshSetup()
-    return
-  }
-  if (context.globalState.get<boolean>(DECLINED_KEY)) return
+  // Asked for by name — from the command palette or the setup page — so no second question.
+  if (force) return connect()
 
-  const add = 'Add hooks'
-  const answer = await vscode.window.showInformationMessage(
-    'Notify for Claude Code needs four hooks in ~/.claude/settings.json to hear when a Claude Code session finishes or waits for you. Add them? Nothing else in the file changes.',
-    add, 'Not now')
-  if (answer !== add) {
-    await context.globalState.update(DECLINED_KEY, true)
-    log('hooks declined — run "Notify for Claude Code: Add hooks" to add them later')
-    return
-  }
-  try {
-    wireHooks(HOME)
-    await context.globalState.update(DECLINED_KEY, false)
-    vscode.window.showInformationMessage('Notify for Claude Code: hooks added. Sessions started from now on will report.')
-  } catch (err) {
-    vscode.window.showErrorMessage(`Notify for Claude Code could not update ~/.claude/settings.json: ${String(err)}`)
-  }
-  await refreshSetup()
+  const last = context.globalState.get<number>(REMINDED_KEY, 0)
+  if (Date.now() - last < 10 * 60_000) return
+  await context.globalState.update(REMINDED_KEY, Date.now())
+  const add = 'Connect'
+  const setup = 'Open setup'
+  const answer = await vscode.window.showWarningMessage(
+    'Notify for Claude Code is not connected to Claude Code yet, so no session reports. Connecting adds four hooks to ~/.claude/settings.json; nothing else in the file changes.',
+    add, setup)
+  if (answer === add) await connect()
+  else if (answer === setup) await openSetup()
+}
+
+/* ------------------------------------------------------------- quiet time */
+
+const quietSeconds = () => vscode.workspace.getConfiguration('claudeNotify').get<number>('minTurnSeconds', QUIET_DEFAULT)
+
+function quietLabel(seconds: number): string {
+  if (seconds < 60) return `${seconds} seconds`
+  const minutes = seconds / 60
+  return `${minutes} minute${minutes === 1 ? '' : 's'}`
+}
+
+/** A turn shorter than this you were watching; longer means fewer notifications. */
+async function chooseQuietTime(): Promise<void> {
+  const now = quietSeconds()
+  const pick = await vscode.window.showQuickPick(QUIET_CHOICES.map((seconds) => ({
+    label: quietLabel(seconds),
+    description: [seconds === QUIET_DEFAULT && 'default', seconds === now && 'current'].filter(Boolean).join(' · '),
+    seconds,
+  })), {
+    title: 'Announce a finished turn only when it took longer than…',
+    placeHolder: 'A shorter turn finishes quietly — you were watching it. Longer means fewer notifications.',
+  })
+  if (!pick) return
+  await vscode.workspace.getConfiguration('claudeNotify').update('minTurnSeconds', pick.seconds, vscode.ConfigurationTarget.Global)
+  vscode.window.setStatusBarMessage(`$(check) Notify for Claude Code: turns longer than ${pick.label} are announced`, 5000)
 }
 
 /* ------------------------------------------------------------------ setup */
@@ -481,6 +541,7 @@ async function refreshSetup(): Promise<void> {
   await vscode.commands.executeCommand('setContext', 'claudeNotify.connected', connected)
   await vscode.commands.executeCommand('setContext', 'claudeNotify.allowed', status.code === 0)
   await vscode.commands.executeCommand('setContext', 'claudeNotify.persistent', /^style: alert$/m.test(status.out))
+  await vscode.commands.executeCommand('setContext', 'claudeNotify.sharing', (await hiddenWhileSharing()) === false)
 }
 
 function openSetup(): Thenable<unknown> {
@@ -504,6 +565,33 @@ async function allowNotifications(): Promise<void> {
   const answer = await vscode.window.showWarningMessage(
     'macOS has notifications turned off for Notify for Claude Code. Turn them on in System Settings → Notifications.', open)
   if (answer === open) openNotificationSettings()
+}
+
+/**
+ * macOS hides every notification while the screen is mirrored, shared or recorded, unless
+ * "When mirroring or sharing the display" is on — in a call or a demo none would show.
+ * Read through cfprefsd: the file on disk lags behind the switch. null when it cannot tell.
+ */
+function hiddenWhileSharing(): Promise<boolean | null> {
+  if (process.platform !== 'darwin') return Promise.resolve(false)
+  return new Promise((resolve) => {
+    const child = spawn('/bin/sh', ['-c',
+      'defaults export com.apple.ncprefs - | plutil -extract dnd_prefs raw -o - - | base64 -D | plutil -convert json -o - -',
+    ], { stdio: ['ignore', 'pipe', 'ignore'] })
+    let out = ''
+    child.stdout.on('data', (c) => { out += c })
+    child.on('close', () => {
+      try { resolve(JSON.parse(out).dndMirrored === true) } catch { resolve(null) }
+    })
+    child.on('error', () => resolve(null))
+  })
+}
+
+/** The switch is on the Notifications page itself, not on our app's. */
+function showWhileSharing(): void {
+  spawn('open', ['x-apple.systempreferences:com.apple.Notifications-Settings.extension'], { stdio: 'ignore' })
+    .on('error', (err) => log(`could not open System Settings: ${String(err)}`))
+  vscode.window.showInformationMessage('Notify for Claude Code: under "Allow notifications", turn on "When mirroring or sharing the display". Until then macOS hides every notification while your screen is shared or recorded.')
 }
 
 /** Straight to our app's page; a macOS that ignores the id opens the list. */
@@ -545,6 +633,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   statusBar.name = 'Claude Code sessions'
   context.subscriptions.push(output, statusBar)
 
+  // Uninstalling removes the copied script, but VS Code keeps what this extension
+  // remembered. With no script there, this is a first start again: setup page and all.
+  if (!existsSync(stableScriptPath(HOME))) {
+    await context.globalState.update(SETUP_SHOWN_KEY, undefined)
+    await context.globalState.update(REMINDED_KEY, undefined)
+  }
   try {
     if (installScript(context.asAbsolutePath(join('dist', 'claude-notify.mjs')), HOME)) log('notifier script updated')
     if (writeRunner(HOME, process.execPath)) log('hook runner updated')
@@ -592,7 +686,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       const cwd = folder?.scheme === 'file' && existsSync(folder.fsPath) ? folder.fsPath : undefined
       const here = Boolean(cwd && linkInfo) && editorNotificationsOn()
       await runNotifier(context, ['--test'], cwd)
-      vscode.window.showInformationMessage(`Notify for Claude Code: test notification sent — it should appear among the system notifications${here ? ' and in this window' : ''}.`)
+      const sent = `Notify for Claude Code: test notification sent — it should appear among the system notifications${here ? ' and in this window' : ''}.`
+      if (await hiddenWhileSharing()) {
+        const open = 'Open settings'
+        const answer = await vscode.window.showWarningMessage(`${sent} While your screen is shared or recorded, macOS hides it — unless "When mirroring or sharing the display" is on.`, open)
+        if (answer === open) showWhileSharing()
+      } else vscode.window.showInformationMessage(sent)
     }),
     vscode.commands.registerCommand('claudeNotify.doctor', async () => {
       const report = await runNotifier(context, ['--doctor'])
@@ -610,6 +709,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.commands.registerCommand('claudeNotify.setup', openSetup),
     vscode.commands.registerCommand('claudeNotify.allowNotifications', allowNotifications),
     vscode.commands.registerCommand('claudeNotify.openNotificationSettings', openNotificationSettings),
+    vscode.commands.registerCommand('claudeNotify.showWhileSharing', showWhileSharing),
+    vscode.commands.registerCommand('claudeNotify.chooseQuietTime', chooseQuietTime),
     vscode.commands.registerCommand('claudeNotify.removeHooks', () => {
       const removed = unwireHooks(HOME)
       void refreshSetup()

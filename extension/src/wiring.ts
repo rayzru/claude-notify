@@ -1,5 +1,6 @@
 import { spawnSync } from 'node:child_process'
 import { chmodSync, copyFileSync, cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 
 /**
@@ -27,6 +28,8 @@ export const sessionsDir = (home: string) => join(claudeDir(home), 'claude-notif
 export const configPath = (home: string) => join(claudeDir(home), 'claude-notify.config.json')
 /** A pause, shared with the notifier and every window: { all?, editor? }, each a time or true. */
 export const pausePath = (home: string) => join(claudeDir(home), 'claude-notify', 'pause.json')
+/** The notifier's per-turn start times and waiting-notifier pids. */
+export const stateDir = (tmp: string) => join(tmp, 'claude-notify')
 
 export type PauseScope = 'all' | 'editor'
 
@@ -119,11 +122,16 @@ export function installHelper(bundled: string, home: string): boolean {
   return true
 }
 
-/** The Claude Code plugin brings its own hooks; wiring ours too would notify twice. */
+/**
+ * The Claude Code plugin brings its own hooks; wiring ours too would notify twice. A plugin
+ * switched off in enabledPlugins runs no hooks, so it does not count: ours are needed then.
+ */
 export function pluginInstalled(home: string): boolean {
   const registry = readJson(join(claudeDir(home), 'plugins', 'installed_plugins.json'))
   const plugins = registry?.plugins
-  return Boolean(plugins && typeof plugins === 'object' && Object.keys(plugins).some((k) => k.startsWith('claude-notify@')))
+  if (!plugins || typeof plugins !== 'object') return false
+  const enabled = readJson(settingsPath(home))?.enabledPlugins || {}
+  return Object.keys(plugins).some((k) => k.startsWith('claude-notify@') && enabled[k] !== false)
 }
 
 /** Hooks from before the runner: they work only where node is on PATH. */
@@ -213,11 +221,29 @@ export function writeConfig(home: string, values: {
   writeFileSync(path, JSON.stringify(next, null, 2) + '\n')
 }
 
-/** Leaves nothing behind: hooks, the copied script and app, the link files. */
-export function removeEverything(home: string): number {
+/** Withdraws what the app delivered: a click on one would start a runner that is gone. */
+function withdrawNotifications(home: string): void {
+  const notify = join(helperPath(home), 'Contents', 'MacOS', 'notify')
+  if (!existsSync(notify)) return
+  const listed = spawnSync(notify, ['-list', 'ALL'], { encoding: 'utf8', timeout: 5000 })
+  for (const row of (listed.stdout || '').split('\n').slice(1)) {
+    const group = row.split('\t')[0]
+    if (group) spawnSync(notify, ['-remove', group], { stdio: 'ignore', timeout: 5000 })
+  }
+}
+
+/**
+ * Leaves nothing behind: hooks, delivered notifications, the copied script and app, the
+ * session list, link files, pause, debug log and per-turn state. The config file goes
+ * too, unless the claude-notify plugin is installed — they are its settings as well.
+ */
+export function removeEverything(home: string, tmp = tmpdir()): number {
   const removed = unwireHooks(home)
+  withdrawNotifications(home)
   if (existsSync(helperPath(home)) && existsSync(LSREGISTER)) spawnSync(LSREGISTER, ['-u', helperPath(home)], { stdio: 'ignore' })
   rmSync(join(claudeDir(home), 'claude-notify'), { recursive: true, force: true })
   rmSync(legacyLinkPath(home), { force: true })
+  rmSync(stateDir(tmp), { recursive: true, force: true })
+  if (!pluginInstalled(home)) rmSync(configPath(home), { force: true })
   return removed
 }
