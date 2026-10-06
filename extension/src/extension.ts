@@ -11,7 +11,7 @@ import {
   writeConfig, writeRunner, type PauseScope,
 } from './wiring'
 import { ago, markSeen, modelName, ownerOf, readDetails, readSessions, tokens, windowName, type Session } from './sessions'
-import { toastFor } from './toast'
+import { tabShowsTitle, toastFor } from './toast'
 
 /**
  * The notifier runs outside the editor — it is a hook, spawned per event, and macOS
@@ -291,11 +291,29 @@ function editorNotificationsOn(): boolean {
 }
 
 /**
+ * The user is already looking at the session: this window has focus and its active tab is the
+ * session's own Claude Code tab. A toast would only cover the box they type in. A session kept
+ * in the Claude sidebar cannot be told apart this way, so it still gets one.
+ */
+function sessionInFront(title: string): boolean {
+  if (!vscode.window.state.focused) return false
+  const tab = vscode.window.tabGroups.activeTabGroup.activeTab
+  const input = tab?.input
+  return input instanceof vscode.TabInputWebview
+    && input.viewType.endsWith('claudeVSCodePanel')
+    && tabShowsTitle(tab!.label, title)
+}
+
+/**
  * The system notification, repeated in this window. Its button and the session's name in
  * it go where a click on the system one goes.
  */
 function notifyHere(context: vscode.ExtensionContext, body: any): boolean {
   if (!editorNotificationsOn()) return false
+  if (sessionInFront(String(body?.title || ''))) {
+    log(`not shown here: "${String(body?.title)}" is the tab in front`)
+    return false
+  }
   const toast = toastFor(body, 'claudeNotify.openSession')
   const show = toast.severity === 'error' ? vscode.window.showErrorMessage
     : toast.severity === 'warning' ? vscode.window.showWarningMessage

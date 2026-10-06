@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { toastFor } from './.build/toast.mjs'
+import { tabShowsTitle, toastFor } from './.build/toast.mjs'
 
 let n = 0
 const test = (name, fn) => { fn(); n++; console.log('ok  ', name) }
@@ -76,6 +76,24 @@ test('an error is shown as one, a wait as a warning, the rest as information', (
 
 test('the button takes the label the notifier sends, in the user\'s language', () => {
   assert.equal(toastFor({ session: S, openLabel: 'Открыть сессию' }, OPEN).button, 'Открыть сессию')
+})
+
+test('a Claude Code tab is recognised by its label: whole, cut short, or marked', () => {
+  assert.equal(tabShowsTitle('Fix the flaky test', 'Fix the flaky test'), true)
+  // Longer than 25 characters: 24 of them and an ellipsis.
+  const long = 'VSCode уведомления и публикация расширения'
+  assert.equal(tabShowsTitle(long.slice(0, 24) + '…', long), true)
+  assert.equal(tabShowsTitle('● Fix the flaky test', 'Fix the flaky test'), true)
+  assert.equal(tabShowsTitle('Exactly twenty-five chars', 'Exactly twenty-five chars'), true)
+})
+
+test('another session\'s tab, or one with no title yet, is not this one', () => {
+  assert.equal(tabShowsTitle('Release notes for 0.2.0', 'Fix the flaky test'), false)
+  assert.equal(tabShowsTitle('Fix the flaky', 'Fix the flaky test'), false)
+  assert.equal(tabShowsTitle('Claude Code', 'Claude · app'), false)
+  assert.equal(tabShowsTitle('…', 'Fix the flaky test'), false)
+  assert.equal(tabShowsTitle('', 'Fix the flaky test'), false)
+  assert.equal(tabShowsTitle('Fix the flaky test', ''), false)
 })
 
 console.log(`\n${n} passed`)

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.2
+
+- No notification inside VS Code for the session you are looking at — its tab in front of a
+  focused window. It covered the box you type in. The system notification still comes.
+
 ## 0.2.1
 
 - A *Sponsor* button on the extension's page, for anyone who wants to support the project.
