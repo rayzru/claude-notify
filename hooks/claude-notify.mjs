@@ -6,9 +6,9 @@
  * Notification. It tells you when a session has finished and when one is
  * waiting for you, and a click takes you to that session's tab in the editor.
  *
- * Zero dependencies: it drives the notifier the OS already ships —
- * terminal-notifier or osascript on macOS, a WinRT toast through PowerShell on
- * Windows, notify-send on Linux.
+ * Zero dependencies. On macOS it drives the small notifying app the VS Code extension
+ * installs, or terminal-notifier, or osascript as a last resort; a WinRT toast through
+ * PowerShell on Windows; notify-send on Linux.
  *
  * Modes:
  *   (no args)       hook mode; reads the hook payload as JSON on stdin
@@ -18,6 +18,10 @@
  *   --doctor        check the environment and report what is broken
  *   --init-config   write a config file with every key at its default
  *   --list          list delivered notifications (macOS only)
+ *   --pause [minutes] [--editor]
+ *                   pause notifications — all of them, or only the ones shown inside
+ *                   VS Code; without minutes, until --resume
+ *   --resume [--editor]
  *   --help
  *
  * click: "auto" attaches the editor deep link only when the session actually
@@ -47,10 +51,17 @@ function debug(line) {
 
 // One file per VS Code window running the extension; empty when it is not installed.
 const LINKS_DIR = join(homedir(), '.claude', 'claude-notify', 'links')
+// Both kept by the VS Code extension at fixed paths, which outlive its versioned folder:
+// its own notifying app, and a runner that starts this script with the editor's runtime,
+// so hooks need no Node.js of their own.
+const HELPER = join(homedir(), '.claude', 'claude-notify', 'Notify for Claude Code.app', 'Contents', 'MacOS', 'notify')
+const RUNNER = join(homedir(), '.claude', 'claude-notify', 'claude-notify')
 // One file per active session, shared by every window: who, where, in what state.
 const SESSIONS_DIR = join(homedir(), '.claude', 'claude-notify', 'sessions')
 // A session closed mid-turn never sends Stop; after this long without an event it is gone.
 const SESSION_TTL_MS = 3 * 3600_000
+// A pause, shared with every VS Code window: { all?, editor? }, each a time or true.
+const PAUSE_PATH = join(homedir(), '.claude', 'claude-notify', 'pause.json')
 const CONFIG_PATH = process.env.CLAUDE_NOTIFY_CONFIG || join(homedir(), '.claude', 'claude-notify.config.json')
 const RESOLVED_WITHOUT_CLICK = new Set(['@TIMEOUT', '@CLOSED', ''])
 const MAC_SOUNDS = { done: 'Glass', waiting: 'Ping', error: 'Basso' }
@@ -93,6 +104,33 @@ function readJsonFile(path, { stripComments = false } = {}) {
   } catch {
     return null
   }
+}
+
+/**
+ * When a pause ends: a time, Infinity while paused until resumed, 0 when not paused.
+ * Read on every event, so a pause set from any window applies at once. `editor` is
+ * honoured by the extension, which is what shows notifications inside VS Code.
+ */
+function pausedUntil(scope) {
+  const until = readJsonFile(PAUSE_PATH)?.[scope]
+  if (until === true) return Infinity
+  return typeof until === 'number' && until > Date.now() ? until : 0
+}
+
+/** `until` is a time, Infinity for until resumed, or null to resume. */
+function setPause(scope, until) {
+  const pause = readJsonFile(PAUSE_PATH) || {}
+  if (until === null) delete pause[scope]
+  else pause[scope] = until === Infinity ? true : until
+  mkdirSync(dirname(PAUSE_PATH), { recursive: true })
+  writeFileSync(PAUSE_PATH, JSON.stringify(pause) + '\n')
+}
+
+function describePause(scope) {
+  const until = pausedUntil(scope)
+  if (!until) return 'on'
+  if (until === Infinity) return 'paused until resumed'
+  return `paused until ${new Date(until).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
 }
 
 function envFlag(name) {
@@ -249,8 +287,10 @@ function editorLinks() {
     if (!link || !Number.isInteger(link.port) || typeof link.token !== 'string') continue
     try {
       process.kill(link.pid, 0)
-    } catch {
-      try { unlinkSync(path) } catch {} // left behind by a crashed window
+    } catch (err) {
+      // EPERM: alive, only not ours to signal. A dry run only looks.
+      if (err.code === 'EPERM') { links.push(link); continue }
+      if (process.env.CLAUDE_NOTIFY_DRYRUN !== '1') try { unlinkSync(path) } catch {} // left behind by a crashed window
       continue
     }
     links.push(link)
@@ -358,7 +398,9 @@ async function focusOrOpen(o) {
 
 /* ----------------------------------------------------------- notification */
 
-function findTerminalNotifier() {
+/** The extension's own app when it is installed; terminal-notifier otherwise. */
+function findNotifier() {
+  if (existsSync(HELPER)) return HELPER
   const found = spawnSync('which', ['terminal-notifier'], { encoding: 'utf8' })
   const path = (found.stdout || '').trim()
   if (path && existsSync(path)) return path
@@ -371,7 +413,7 @@ function findTerminalNotifier() {
 /** Drops an already delivered notification, so no orphan is left to click. */
 function dropNotification(group) {
   if (platform() !== 'darwin' || !group) return
-  const notifier = findTerminalNotifier()
+  const notifier = findNotifier()
   if (!notifier) return
   try { spawnSync(notifier, ['-remove', group], { stdio: 'ignore' }) } catch {}
 }
@@ -403,7 +445,7 @@ function buildPlan(o) {
   const os = platform()
 
   if (os === 'darwin') {
-    const notifier = o.notifierPath ?? findTerminalNotifier()
+    const notifier = o.notifierPath ?? findNotifier()
     if (notifier) {
       const args = ['-title', o.title, '-message', o.message]
       if (o.subtitle) args.push('-subtitle', o.subtitle)
@@ -415,7 +457,7 @@ function buildPlan(o) {
       // terminal-notifier does not check whose notification it was, so a fresh click was
       // answered by a 26-minute-old process and took you to the wrong session. With the
       // command stored per notification there is nothing left to mix up. How long it
-      // stays on screen is macOS's call: Notifications → terminal-notifier → Persistent.
+      // stays on screen is macOS's call: Notifications → Notify for Claude Code → Persistent.
       if (o.focusCommand) args.push('-execute', o.focusCommand)
       else if (o.uri) args.push('-open', o.uri)
       return { cmd: notifier, args, waits: false }
@@ -426,7 +468,7 @@ function buildPlan(o) {
       cmd: 'osascript',
       args: ['-e', `display notification "${esc(o.message)}" with title "${esc(o.title)}"${o.subtitle ? ` subtitle "${esc(o.subtitle)}"` : ''}${sound}`],
       waits: false,
-      degraded: 'terminal-notifier not found: no click action, banner only',
+      degraded: 'no notifying app found: no click action, banner only',
     }
   }
 
@@ -467,19 +509,53 @@ function openUri(uri) {
 
 /* -------------------------------------------------------------- presenter */
 
+/**
+ * The same notification, shown again inside the window that holds the session — only
+ * that one, since it is the window whose button can open the session where it already is.
+ * The button goes only where a click would: a session in a plain terminal has no tab.
+ */
+function editorTarget(o) {
+  const link = ownerLink(o.root || o.cwd)
+  if (!link) return null
+  return {
+    link,
+    body: {
+      kind: o.soundKey,
+      title: o.title,
+      status: o.status || '',
+      project: o.project || '',
+      text: o.detail ?? o.message,
+      // what a window running an older build of the extension shows instead
+      subtitle: o.subtitle,
+      message: o.message,
+      session: o.uri ? o.sessionId : '',
+      root: o.root || o.cwd || '',
+      openLabel: o.openLabel,
+    },
+  }
+}
+
 function present(o) {
+  if (o.debug) debugOn = true
   const plan = buildPlan(o)
-  if (!plan) return
+  const editor = editorTarget(o)
   if (process.env.CLAUDE_NOTIFY_DRYRUN === '1') {
-    console.log(JSON.stringify({ platform: platform(), ...plan }, null, 2))
+    console.log(JSON.stringify({ platform: platform(), ...plan, editor: editor && { window: editor.link.folders, body: editor.body } }, null, 2))
     return
   }
+  if (editor) {
+    postToEditor(editor.link, '/notify', editor.body, 1500)
+      .then((ok) => debug(`editor notification window=${editor.link.pid} ok=${ok} group=${o.group}`))
+  }
+  if (!plan) return
   if (!plan.waits) {
-    spawnSync(plan.cmd, plan.args, { stdio: 'ignore' })
+    // Not spawnSync: while it blocks, the request to the editor times out unanswered, and
+    // a toast through PowerShell, or terminal-notifier on a busy Mac, takes seconds.
+    spawn(plan.cmd, plan.args, { stdio: 'ignore' })
+      .on('error', (err) => debug(`notifier error: ${err && err.message}`))
     return
   }
 
-  if (o.debug) debugOn = true
   const path = pidPath(o.group)
   const child = spawn(plan.cmd, plan.args, { stdio: ['ignore', 'pipe', 'pipe'] })
   writeState(path, process.pid)
@@ -506,7 +582,7 @@ function present(o) {
   // keeps waiting for a reply that cannot come, and the process lives forever. Check
   // now and then that ours is still listed, and leave when it is not. -list does show
   // an alert that is still on screen, so this cannot cut one short.
-  if (platform() === 'darwin' && plan.cmd.includes('terminal-notifier')) {
+  if (platform() === 'darwin' && plan.cmd !== 'osascript') {
     watch = setInterval(() => {
       const res = spawnSync(plan.cmd, ['-list', o.group], { encoding: 'utf8' })
       if (res.status !== 0) return // cannot tell: better to wait than to drop a live one
@@ -705,6 +781,7 @@ const shellQuote = (value) => `'${String(value).replace(/'/g, `'\\''`)}'`
  * VS Code extension keeps at a fixed path when present, this file otherwise.
  */
 function focusCommandFor(sessionId, root) {
+  if (existsSync(RUNNER)) return [RUNNER, '--focus', sessionId, root || ''].map(shellQuote).join(' ')
   const stable = join(homedir(), '.claude', 'claude-notify', 'claude-notify.mjs')
   const script = existsSync(stable) ? stable : SELF
   return [process.execPath, script, '--focus', sessionId, root || ''].map(shellQuote).join(' ')
@@ -769,7 +846,12 @@ function readStdinJson() {
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
-function compose(cfg, lang, { sessionId, lane, message, soundKey, cwd, root, sessionTitle }) {
+/**
+ * `message` is the whole text of the system notification. `status` and `detail` are the
+ * same news in two parts, for the window to lay out on its own: "Done · 3 min" and how
+ * the answer began. Without them, the message is the detail.
+ */
+function compose(cfg, lang, { sessionId, lane, message, status = '', detail = message, soundKey, cwd, root, sessionTitle }) {
   const group = cfg.groupPerSession ? `claude-${safeId(sessionId)}` : `claude-${safeId(sessionId)}-${Date.now()}`
   const wantsClick = cfg.click === 'focusSession' || (cfg.click === 'auto' && runsInEditor())
   const uri = wantsClick && UUID.test(String(sessionId))
@@ -781,6 +863,10 @@ function compose(cfg, lang, { sessionId, lane, message, soundKey, cwd, root, ses
     title: (sessionTitle || t(lang, 'title', { lane })).slice(0, 120),
     subtitle: sessionTitle ? t(lang, 'title', { lane }).slice(0, 120) : '',
     message: String(message).replace(/\s+/g, ' ').slice(0, 240),
+    status: String(status).slice(0, 120),
+    detail: String(detail).replace(/\s+/g, ' ').slice(0, 240),
+    // Only beside a session's own title: without one, the project already is the title.
+    project: sessionTitle ? String(lane).slice(0, 120) : '',
     openLabel: t(lang, 'open'),
     dismissLabel: t(lang, 'dismiss'),
     soundKey,
@@ -800,6 +886,11 @@ function compose(cfg, lang, { sessionId, lane, message, soundKey, cwd, root, ses
 function notify(cfg, payload) {
   if (cfg.groupPerSession) killWaiting(pidPath(`claude-${safeId(payload.sessionId)}`))
   sweepStale(cfg.staleHours)
+  // The older notification still goes: it is out of date either way.
+  if (pausedUntil('all')) {
+    debug(`paused: no notification for session=${payload.sessionId}`)
+    return
+  }
   spawnPresenter(compose(cfg, resolveLanguage(cfg), payload))
 }
 
@@ -852,7 +943,7 @@ async function hookMode() {
 
   if (event === 'StopFailure') {
     if (!cfg.events.error) return
-    notify(cfg, { sessionId, lane, cwd: data.cwd, root, sessionTitle, message: t(lang, 'error'), soundKey: 'error' })
+    notify(cfg, { sessionId, lane, cwd: data.cwd, root, sessionTitle, message: t(lang, 'error'), status: t(lang, 'error'), detail: '', soundKey: 'error' })
     return
   }
 
@@ -864,7 +955,7 @@ async function hookMode() {
     : t(lang, 'doneIn', { n: Math.max(1, Math.round(elapsed / 60)) })
   const reply = readLastReply(data.transcript_path)
   const message = reply ? `${status} — ${reply}` : status
-  notify(cfg, { sessionId, lane, cwd: data.cwd, root, sessionTitle, message, soundKey: 'done' })
+  notify(cfg, { sessionId, lane, cwd: data.cwd, root, sessionTitle, message, status, detail: reply, soundKey: 'done' })
 }
 
 /* --------------------------------------------------------------- entry */
@@ -893,6 +984,7 @@ function main() {
       entrypoint: process.env.CLAUDE_CODE_ENTRYPOINT || null,
       runsInEditor: runsInEditor(),
       availableLanguages: Object.keys(STRINGS),
+      paused: { all: describePause('all'), editor: describePause('editor') },
       config: cfg,
     }, null, 2))
     return
@@ -908,10 +1000,19 @@ function main() {
       console.log('--list is macOS only; on Windows use the Action Center, on Linux your notification applet')
       return
     }
-    const notifier = findTerminalNotifier()
-    if (!notifier) { console.log('terminal-notifier not installed'); return }
+    const notifier = findNotifier()
+    if (!notifier) { console.log('no notifying app installed'); return }
     const res = spawnSync(notifier, ['-list', 'ALL'], { encoding: 'utf8' })
     process.stdout.write(res.stdout || '')
+    return
+  }
+  if (mode === '--pause' || mode === '--resume') {
+    const rest = process.argv.slice(3)
+    const scopes = rest.includes('--editor') ? ['editor'] : mode === '--resume' ? ['all', 'editor'] : ['all']
+    const minutes = Number(rest.find((a) => /^\d+$/.test(a)))
+    for (const scope of scopes) setPause(scope, mode === '--resume' ? null : minutes > 0 ? Date.now() + minutes * 60_000 : Infinity)
+    console.log(`notifications: ${describePause('all')}`)
+    console.log(`inside VS Code: ${describePause('editor')}`)
     return
   }
   if (mode === '--focus') {
@@ -937,6 +1038,7 @@ function main() {
     spawnPresenter(compose(cfg, lang, {
       sessionId: arg || 'test',
       lane: basename(process.cwd()),
+      cwd: process.cwd(),
       message: t(lang, 'test'),
       soundKey: 'done',
     }))
@@ -1020,27 +1122,55 @@ function doctor() {
 
   if (!cfg.enabled) fail(`disabled in ${CONFIG_PATH} — set "enabled": true, nothing will fire`)
   else ok('enabled')
+  if (pausedUntil('all')) warn(`notifications are ${describePause('all')} — \`--resume\` turns them back on`)
+  if (pausedUntil('editor')) say('    ', `notifications inside VS Code are ${describePause('editor')}`)
 
   if (platform() !== 'darwin') {
     warn(`platform ${platform()} is not covered: this plugin targets macOS with VS Code`)
   } else {
-    const notifier = findTerminalNotifier()
+    const notifier = findNotifier()
+    let allowed = false
     if (!notifier) {
-      warn('terminal-notifier not found — falling back to osascript: banner only, no click')
+      warn('no notifying app: neither Notify for Claude Code nor terminal-notifier — falling back to osascript: banner only, no click')
+    } else if (notifier === HELPER) {
+      const probe = spawnSync(HELPER, ['-status'], { encoding: 'utf8' })
+      const status = (probe.stdout || '').trim()
+      if (probe.status === 0) {
+        allowed = true
+        ok('Notify for Claude Code may show notifications')
+        const style = ((probe.stdout || '').match(/^style: (\w+)$/m) || [])[1]
+        if (style === 'banner') say('    ', 'they slide away after a few seconds — for ones that stay, set System Settings → Notifications → Notify for Claude Code → Persistent')
+        else if (style === 'none') warn('alerts are off for Notify for Claude Code — they only collect in Notification Centre; turn them on in System Settings → Notifications')
+      } else if (status === 'notDetermined') {
+        warn('Notify for Claude Code has not been allowed to notify yet — run "Notify for Claude Code: Allow notifications" in VS Code')
+      } else {
+        fail('macOS denies notifications to Notify for Claude Code — turn them on in System Settings → Notifications')
+      }
     } else {
       const probe = spawnSync(notifier, ['-list', 'ALL'], { encoding: 'utf8' })
       if (probe.status === 3 || /not allowed/i.test(probe.stderr || '')) {
         fail('macOS denies notifications to terminal-notifier — launch its .app bundle once via `open -a` to get the prompt')
       } else {
+        allowed = true
         ok(`terminal-notifier at ${notifier}`)
-        // Nothing waits for a click any more — the command rides in the notification — so a
-        // notification without a process is normal. What does matter is a waiting process
-        // left over from an older version: it takes clicks meant for other notifications.
-        const waiting = spawnSync('pgrep', ['-f', 'claude-notify.mjs --show'], { encoding: 'utf8' }).stdout.trim().split('\n').filter(Boolean)
-        if (waiting.length) warn(`${waiting.length} waiting notifier process(es) from an older version — they can take clicks meant for other sessions; stop them with \`pkill -f 'claude-notify.mjs --show'\``)
-        else ok('no leftover waiting notifiers')
       }
     }
+    if (allowed) {
+      // Nothing waits for a click any more — the command rides in the notification — so a
+      // notification without a process is normal. What does matter is a waiting process
+      // left over from an older version: it takes clicks meant for other notifications.
+      const waiting = spawnSync('pgrep', ['-f', 'claude-notify.mjs --show'], { encoding: 'utf8' }).stdout.trim().split('\n').filter(Boolean)
+      if (waiting.length) warn(`${waiting.length} waiting notifier process(es) from an older version — they can take clicks meant for other sessions; stop them with \`pkill -f 'claude-notify.mjs --show'\``)
+      else ok('no leftover waiting notifiers')
+    }
+  }
+
+  // The extension's runner starts hooks with the editor's own runtime. If the editor has
+  // moved since, the runner falls back to a node on PATH, which may not exist.
+  if (existsSync(RUNNER)) {
+    const runtime = (readFileSync(RUNNER, 'utf8').match(/^runtime='(.*)'$/m) || [])[1]
+    if (runtime && existsSync(runtime)) ok('hooks run with the editor\'s own runtime — no Node.js needed')
+    else warn(`the runner's runtime is gone (${runtime || 'unreadable'}) — restart VS Code so the extension rewrites it`)
   }
 
   if (!runsInEditor()) {
@@ -1048,10 +1178,10 @@ function doctor() {
   } else if (editorLinks().length) {
     const windows = editorLinks().length
     ok(`running under the editor (${process.env.CLAUDE_CODE_ENTRYPOINT || 'vscode'})`)
-    ok(`Claude Notify extension is listening in ${windows} window${windows > 1 ? 's' : ''} — clicks go to the window that owns the session`)
+    ok(`The Notify for Claude Code extension is listening in ${windows} window${windows > 1 ? 's' : ''} — clicks go to the window that owns the session`)
   } else {
     ok(`running under the editor (${process.env.CLAUDE_CODE_ENTRYPOINT || 'vscode'})`)
-    say('    ', 'Claude Notify extension not running — clicks use vscode:// links instead')
+    say('    ', 'The Notify for Claude Code extension is not running — clicks use vscode:// links instead')
     const trusted = editorTrustsLink(cfg.extensionId)
     if (trusted === false) warn(`VS Code has not been told to trust links to ${cfg.extensionId} — the first click shows a confirmation prompt; answer it once`)
     else if (trusted === null) say('    ', `could not read VS Code's trusted-link list (sqlite3 unavailable or no state db)`)

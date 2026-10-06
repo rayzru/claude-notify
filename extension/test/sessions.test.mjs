@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { existsSync, mkdtempSync, mkdirSync, utimesSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import * as s from './.build/sessions.mjs'
@@ -189,6 +189,19 @@ test('a long answer is cut at its first sentence, or at a word with an ellipsis'
   assert.equal(s.excerpt('Done with the migration. ' + 'x '.repeat(200)), 'Done with the migration.')
   const cut = s.excerpt('word '.repeat(100))
   assert.ok(cut.endsWith('…') && cut.length <= 140)
+})
+
+test('a session gone to stops waiting; one that is not waiting is left as it is', () => {
+  const d = dir()
+  const read = (id) => JSON.parse(readFileSync(join(d, `${id}.json`), 'utf8'))
+  put(d, 'w', { state: 'waiting', message: 'Claude needs your permission to use Bash', at: 1 })
+  put(d, 'r', { state: 'running', message: '', at: 1 })
+  s.markSeen(d, 'w', NOW)
+  s.markSeen(d, 'r', NOW)
+  s.markSeen(d, 'missing', NOW)
+  assert.deepEqual(read('w'), { session: 'w', state: 'running', message: '', at: NOW })
+  assert.equal(read('r').at, 1)
+  assert.equal(existsSync(join(d, 'missing.json')), false)
 })
 
 console.log(`\n${n} passed`)

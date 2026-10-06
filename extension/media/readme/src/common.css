@@ -1,0 +1,5 @@
+/* Replicas of VS Code's Dark Modern theme and a macOS notification, for README images. */
+@import url("https://cdn.jsdelivr.net/npm/@vscode/codicons@0.0.36/dist/codicon.css");
+html, body { margin: 0; }
+body { font: 13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; color: #cccccc; -webkit-font-smoothing: antialiased; }
+.codicon { font-size: 16px; vertical-align: -3px; }

@@ -1,12 +1,14 @@
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, statSync } from 'node:fs'
+import { spawnSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import * as w from './.build/wiring.mjs'
 
 const fresh = () => mkdtempSync(join(tmpdir(), 'cn-home-'))
 const settings = (h) => JSON.parse(readFileSync(join(h, '.claude', 'settings.json'), 'utf8'))
-const ours = (h) => `node "${w.stableScriptPath(h)}"`
+const ours = (h) => `"${w.runnerPath(h)}"`
+const legacy = (h) => `node "${w.stableScriptPath(h)}"`
 let n = 0
 const test = (name, fn) => { fn(); n++; console.log('ok  ', name) }
 
@@ -40,6 +42,60 @@ test('removal takes only ours and drops events left empty', () => {
   assert.deepEqual(s.hooks.Stop, [other])
   assert.equal('Notification' in s.hooks, false)
   assert.equal(w.unwireHooks(h), 0)
+})
+
+test('hooks from before the runner are replaced, not doubled, and removal takes both kinds', () => {
+  const h = fresh(); mkdirSync(join(h, '.claude'))
+  const other = { type: 'command', command: 'other-tool stop' }
+  const old = (cmd) => ({ hooks: [{ type: 'command', command: cmd, timeout: 10 }] })
+  writeFileSync(join(h, '.claude', 'settings.json'), JSON.stringify({ hooks: {
+    Stop: [{ hooks: [other, { type: 'command', command: legacy(h) }] }],
+    Notification: [old(legacy(h))],
+  } }))
+  assert.equal(w.hooksOutdated(h), true)
+  w.wireHooks(h)
+  assert.equal(w.hooksOutdated(h), false)
+  assert.equal(w.hooksWired(h), true)
+  const s = settings(h)
+  assert.deepEqual(s.hooks.Stop[0].hooks, [other])
+  assert.equal(s.hooks.Stop[1].hooks[0].command, ours(h))
+  assert.equal(s.hooks.Notification.length, 1)
+  // An install that was never migrated still comes out clean.
+  writeFileSync(join(h, '.claude', 'settings.json'), JSON.stringify({ hooks: { Stop: [old(legacy(h)), old(ours(h))] } }))
+  assert.equal(w.unwireHooks(h), 2)
+})
+
+test('the runner starts the notifier with the editor runtime, and falls back to node', () => {
+  const h = fresh()
+  const runtime = join(h, 'fake runtime')
+  writeFileSync(runtime, '#!/bin/sh\necho "runtime $ELECTRON_RUN_AS_NODE $*"\n', { mode: 0o755 })
+  assert.equal(w.writeRunner(h, runtime), true)
+  assert.equal(w.writeRunner(h, runtime), false)
+  assert.equal(statSync(w.runnerPath(h)).mode & 0o111, 0o111)
+  const viaRuntime = spawnSync(w.runnerPath(h), ['--focus', 'x'], { encoding: 'utf8' })
+  assert.equal(viaRuntime.stdout.trim(), `runtime 1 ${w.stableScriptPath(h)} --focus x`)
+  // The editor moved: node on PATH runs the script instead.
+  mkdirSync(join(h, '.claude', 'claude-notify'), { recursive: true })
+  writeFileSync(w.stableScriptPath(h), 'console.log("node", process.argv.slice(2).join(" "))\n')
+  w.writeRunner(h, join(h, 'gone'))
+  assert.equal(spawnSync(w.runnerPath(h), ['--doctor'], { encoding: 'utf8' }).stdout.trim(), 'node --doctor')
+})
+
+test('the notifying app is copied only when it changed, and not at all where it was not built', () => {
+  const h = fresh()
+  const bundled = join(h, 'notify-helper')
+  const binary = (root) => join(root, 'Contents', 'MacOS', 'notify')
+  assert.equal(w.installHelper(bundled, h), false)
+  mkdirSync(join(bundled, 'Contents', 'MacOS'), { recursive: true })
+  writeFileSync(binary(bundled), 'v1')
+  writeFileSync(join(bundled, 'Contents', 'Info.plist'), '<plist/>')
+  assert.equal(w.installHelper(bundled, h), true)
+  assert.equal(readFileSync(binary(w.helperPath(h)), 'utf8'), 'v1')
+  assert.ok(w.helperPath(h).endsWith('.app'))
+  assert.equal(w.installHelper(bundled, h), false)
+  writeFileSync(binary(bundled), 'v2')
+  assert.equal(w.installHelper(bundled, h), true)
+  assert.equal(readFileSync(binary(w.helperPath(h)), 'utf8'), 'v2')
 })
 
 test('refuses to rewrite an unreadable settings.json', () => {
@@ -85,6 +141,21 @@ test('full removal leaves nothing behind', () => {
   assert.equal(existsSync(w.legacyLinkPath(h)), false)
   assert.equal(existsSync(w.linkPath(h, 123)), false)
   assert.equal(w.hooksWired(h), false)
+})
+
+test('a pause holds until its time, or until resumed, for each scope on its own', () => {
+  const h = fresh()
+  assert.equal(w.pausedUntil(h, 'all'), 0)
+  w.setPause(h, 'all', 2_000)
+  w.setPause(h, 'editor', Infinity)
+  assert.equal(w.pausedUntil(h, 'all', 1_000), 2_000)
+  assert.equal(w.pausedUntil(h, 'all', 3_000), 0)
+  assert.equal(w.pausedUntil(h, 'editor', 3_000), Infinity)
+  // The notifier reads the same file: until resumed is stored as true, not as a number.
+  assert.deepEqual(JSON.parse(readFileSync(w.pausePath(h), 'utf8')), { all: 2_000, editor: true })
+  w.setPause(h, 'editor', null)
+  assert.equal(w.pausedUntil(h, 'editor'), 0)
+  assert.equal(w.pausedUntil(h, 'all', 1_000), 2_000)
 })
 
 console.log(`\n${n} passed`)

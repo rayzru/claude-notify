@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.2.0
+
+- Nothing to install besides the extension. A small app of its own shows the notifications
+  — under its own name and icon, asked once whether it may — instead of `terminal-notifier`
+  from Homebrew. Hooks run with VS Code's own runtime, so Node.js is not needed either;
+  hooks an older version added are moved over by themselves.
+- A setup page opens on the first start: connect to Claude Code, allow notifications, choose
+  where Claude lives, try it. *Set up…* opens it again.
+- macOS 13 or later, Apple silicon and Intel. Windows and Linux come later.
+- The same notification also appears inside the VS Code window that holds the session,
+  with an *Open session* button; the session's name in it is a link that does the same.
+  `claudeNotify.editorNotifications` turns it off.
+- Pause notifications for 15 minutes, an hour, three hours or until you resume — all of
+  them, or only the ones inside VS Code. From the command palette or the bottom of the
+  session list; the status bar shows it.
+- Now called *Notify for Claude Code*: the name *Claude Notify* is taken on the Marketplace.
+  Settings, commands and the extension ID stay the same.
+
 ## 0.1.0
 
 First release.

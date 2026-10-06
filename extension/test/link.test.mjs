@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import { createServer } from 'node:http'
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { spawn } from 'node:child_process'
 
 const SCRIPT = new URL('../../hooks/claude-notify.mjs', import.meta.url).pathname
@@ -145,12 +145,14 @@ ok('the notification is titled with the session, the project goes underneath')
 assert.equal(done.message, 'Done — Fixed the flaky test in sessions.test and pushed the branch. Next: review and release.')
 ok('and carries how the last answer began, markdown and code stripped')
 
-const plan = await new Promise((resolve) => {
-  const p = spawn(process.execPath, [SCRIPT, '--show', JSON.stringify({ ...done, sound: true })], { env: { ...process.env, HOME: home2, CLAUDE_NOTIFY_DRYRUN: '1', CLAUDE_NOTIFY_PLATFORM: 'darwin' }, stdio: ['ignore', 'pipe', 'ignore'] })
+/** What the presenter would do with a notification, without doing it. */
+const dryShow = (o, env) => new Promise((resolve) => {
+  const p = spawn(process.execPath, [SCRIPT, '--show', JSON.stringify(o)], { env: { ...process.env, CLAUDE_NOTIFY_DRYRUN: '1', ...env }, stdio: ['ignore', 'pipe', 'ignore'] })
   let out = ''
   p.stdout.on('data', (c) => { out += c })
   p.on('close', () => resolve(JSON.parse(out)))
 })
+const plan = await dryShow({ ...done, sound: true }, { HOME: home2, CLAUDE_NOTIFY_PLATFORM: 'darwin' })
 if (plan.cmd.includes('terminal-notifier')) {
   assert.equal(plan.waits, false)
   assert.equal(plan.args.includes('-action'), false)
@@ -162,5 +164,64 @@ if (plan.cmd.includes('terminal-notifier')) {
 assert.equal(await show({ hook_event_name: 'Notification', session_id: D, cwd: '/work/iss', transcript_path: t2, notification_type: 'idle_prompt', message: 'Claude is waiting for your input' }), '')
 ok('and no second one follows when Claude reports the session idle')
 
-for (const w of [a, b, dead]) w.close()
+// What the VS Code extension installs: its own notifying app, and a runner for the hooks.
+const kept = join(home2, '.claude', 'claude-notify')
+const helper = join(kept, 'Notify for Claude Code.app', 'Contents', 'MacOS', 'notify')
+mkdirSync(dirname(helper), { recursive: true })
+writeFileSync(helper, '')
+writeFileSync(join(kept, 'claude-notify'), '')
+const withHelper = await dryShow({ ...done, sound: true }, { HOME: home2, CLAUDE_NOTIFY_PLATFORM: 'darwin' })
+assert.equal(withHelper.cmd, helper)
+ok('the extension\'s own app shows the notification when it is installed')
+
+const viaRunner = JSON.parse(await show({ hook_event_name: 'Stop', session_id: D, cwd: '/work/iss', transcript_path: t2 }))
+assert.match(viaRunner.focusCommand, new RegExp(`^'${join(kept, 'claude-notify')}' '--focus' '${D}'`))
+ok('and a click runs the runner, which needs no node on PATH')
+
+// A pause, set from the command line the way a window sets it.
+const runIn2 = (args) => new Promise((resolve) => {
+  const p = spawn(process.execPath, [SCRIPT, ...args], { env: { ...process.env, HOME: home2 }, stdio: ['ignore', 'pipe', 'ignore'] })
+  let out = ''
+  p.stdout.on('data', (c) => { out += c })
+  p.on('close', () => resolve(out.trim()))
+})
+const pauseFile = () => JSON.parse(readFileSync(join(home2, '.claude', 'claude-notify', 'pause.json'), 'utf8'))
+await runIn2(['--pause'])
+assert.deepEqual(pauseFile(), { all: true })
+assert.equal(await show({ hook_event_name: 'Stop', session_id: D, cwd: '/work/iss', transcript_path: t2 }), '')
+ok('paused, a finished session announces nothing')
+
+await runIn2(['--pause', '30', '--editor'])
+const editorUntil = pauseFile().editor
+assert.ok(editorUntil > Date.now() + 29 * 60_000 && editorUntil < Date.now() + 31 * 60_000)
+await runIn2(['--resume', '--editor'])
+assert.deepEqual(pauseFile(), { all: true })
+await runIn2(['--resume'])
+assert.deepEqual(pauseFile(), {})
+assert.match(await show({ hook_event_name: 'Stop', session_id: D, cwd: '/work/iss', transcript_path: t2 }), /Done/)
+ok('--pause takes minutes and --editor; --resume lifts the pause again')
+
+// The windows of the first half of this test: a holds /work/app, b holds /work/planner.
+const inEditor = (await dryShow(done, { HOME: home })).editor
+assert.deepEqual(inEditor.window, ['/work/planner'])
+assert.deepEqual(inEditor.body, {
+  kind: 'done', title: 'Bildy "v2"',
+  status: 'Done', project: 'planner', text: 'Fixed the flaky test in sessions.test and pushed the branch. Next: review and release.',
+  subtitle: 'Claude · planner', message: done.message,
+  session: D, root: '/work/planner', openLabel: 'Open session',
+})
+ok('the same notification is shown in the window that holds the session, with a button to open it')
+
+assert.equal((await dryShow({ ...done, uri: '' }, { HOME: home })).editor.body.session, '')
+ok('a session with no tab to go to gets no button')
+
+assert.equal((await dryShow({ ...done, root: '/elsewhere', cwd: '/elsewhere' }, { HOME: home })).editor, null)
+ok('and a session that no window holds is shown in none')
+
+const crashed = await fakeWindow('crashed', ['/work/planner'], 999, 999999)
+await dryShow(done, { HOME: home })
+assert.equal(existsSync(crashed.file), true)
+ok('a dry run only looks: even a crashed window keeps its link file')
+
+for (const w of [a, b, dead, crashed]) w.close()
 console.log(`\n${n} passed`)

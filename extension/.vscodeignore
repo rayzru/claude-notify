@@ -5,3 +5,5 @@ esbuild.mjs
 .vscode/**
 **/*.map
 test/**
+native/**
+media/readme/**
