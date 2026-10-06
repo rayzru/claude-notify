@@ -11,8 +11,8 @@ This repository ships two things with versions of their own: the VS Code extensi
 2. Merge to `main`, then tag and push:
 
    ```sh
-   git tag ext-v0.3.0
-   git push origin ext-v0.3.0
+   git tag claude-session-notify@0.3.0
+   git push origin claude-session-notify@0.3.0
    ```
 
 3. The *Release* workflow builds on macOS, because the notifying app is compiled with Swift.

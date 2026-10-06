@@ -1,6 +1,7 @@
 name: Release
 
-# Push a tag named after the version in extension/package.json (ext-v0.2.0) to cut a release:
+# Push a tag naming the extension and the version in extension/package.json
+# (claude-session-notify@0.2.0) to cut a release:
 # the Claude Code plugin in this repository has versions of its own.
 # It is built for macOS only, as two packages — Apple silicon and Intel — that carry the same
 # universal notifying app; the Marketplace offers a package only on its platform. They go to
@@ -8,7 +9,7 @@ name: Release
 # uploaded from the release page.
 on:
   push:
-    tags: ['ext-v*']
+    tags: ['claude-session-notify@*']
 
 permissions:
   contents: write # the GitHub release
@@ -32,7 +33,7 @@ jobs:
       - name: The tag names the version in package.json
         run: |
           version=$(node -p "require('./package.json').version")
-          if [ "ext-v$version" != "$GITHUB_REF_NAME" ]; then
+          if [ "claude-session-notify@$version" != "$GITHUB_REF_NAME" ]; then
             echo "::error::tag $GITHUB_REF_NAME, but extension/package.json says $version"
             exit 1
           fi
@@ -52,7 +53,7 @@ jobs:
         run: |
           awk -v head="## $VERSION" '$0 == head { on = 1; next } /^## / { on = 0 } on' CHANGELOG.md > notes.md
           gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1 \
-            || gh release create "$GITHUB_REF_NAME" --title "Notify for Claude Code $VERSION" --notes-file notes.md
+            || gh release create "$GITHUB_REF_NAME" --title "$VERSION" --notes-file notes.md
           gh release upload "$GITHUB_REF_NAME" claude-session-notify-"$VERSION"-darwin-*.vsix --clobber
       # Open VSX trusts this workflow only once a version exists and the namespace owner has
       # registered it (RELEASING.md); the repository variable says that has happened.
