@@ -84,10 +84,10 @@ status bar, and sessions keep being counted meanwhile.
 Search for **Notify for Claude Code** in the Extensions view, or run
 
 ```sh
-code --install-extension rayzru.claude-notify
+code --install-extension rayz.claude-notify
 ```
 
-It is on [Open VSX](https://open-vsx.org/extension/rayzru/claude-notify) too. The setup page
+It is on [Open VSX](https://open-vsx.org/extension/rayz/claude-notify) too. The setup page
 opens by itself.
 
 ## Requirements

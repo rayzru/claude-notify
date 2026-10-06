@@ -34,7 +34,6 @@ const SESSIONS = sessionsDir(HOME)
 const PROJECTS = join(HOME, '.claude', 'projects')
 const DECLINED_KEY = 'claudeNotify.hooksDeclined'
 const SETUP_SHOWN_KEY = 'claudeNotify.setupShown'
-const SETUP_WALKTHROUGH = 'rayzru.claude-notify#setup'
 const HELPER_ID = 'ru.rayz.notify-for-claude-code'
 /**
  * The Claude Code extension's own "open this session" — the one that decides where. With
@@ -56,6 +55,8 @@ let output: vscode.OutputChannel | undefined
 let watcher: FSWatcher | undefined
 let pauseWatcher: FSWatcher | undefined
 let linkInfo: { port: number; token: string } | undefined
+/** `<publisher>.<name>#setup`, from the running extension rather than written out. */
+let setupWalkthrough = ''
 
 function log(line: string): void {
   output?.appendLine(`${new Date().toISOString().slice(11, 19)}  ${line}`)
@@ -458,7 +459,7 @@ async function refreshSetup(): Promise<void> {
 }
 
 function openSetup(): Thenable<unknown> {
-  return vscode.commands.executeCommand('workbench.action.openWalkthrough', SETUP_WALKTHROUGH, false)
+  return vscode.commands.executeCommand('workbench.action.openWalkthrough', setupWalkthrough, false)
 }
 
 /** The same question a first notification would ask, asked while the user is looking. */
@@ -512,6 +513,7 @@ function runNotifier(context: vscode.ExtensionContext, args: string[], cwd?: str
 /* --------------------------------------------------------------- lifecycle */
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
+  setupWalkthrough = `${context.extension.id}#setup`
   output = vscode.window.createOutputChannel('Notify for Claude Code')
   statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100)
   statusBar.command = 'claudeNotify.showSessions'
