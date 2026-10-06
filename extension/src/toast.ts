@@ -51,3 +51,18 @@ export function toastFor(body: any, openCommand: string): Toast {
     root,
   }
 }
+
+/**
+ * Whether a tab's label names this session. Claude Code labels a session's tab with its title,
+ * cut to 24 characters and an ellipsis when it is longer than 25. A mark it may put before the
+ * title — or that the title itself starts with — is not compared.
+ */
+export function tabShowsTitle(label: string, title: string): boolean {
+  const bare = (value: string) => String(value || '').trim().replace(/^[^\p{L}\p{N}]+(?=[\p{L}\p{N}])/u, '')
+  const name = bare(title)
+  const shown = bare(label)
+  if (!name || !shown) return false
+  if (!shown.endsWith('…')) return shown === name
+  const start = shown.slice(0, -1).trimEnd()
+  return start.length > 0 && name.startsWith(start)
+}
