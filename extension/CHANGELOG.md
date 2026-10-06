@@ -16,8 +16,8 @@
 - Pause notifications for 15 minutes, an hour, three hours or until you resume — all of
   them, or only the ones inside VS Code. From the command palette or the bottom of the
   session list; the status bar shows it.
-- Now called *Notify for Claude Code*: the name *Claude Notify* is taken on the Marketplace.
-  Settings and commands stay the same; the extension ID is now `rayz.claude-notify`.
+- Now called *Notify for Claude Code*, with the ID `rayz.claude-session-notify`: both *Claude
+  Notify* and `claude-notify` are taken on the Marketplace. Settings and commands stay the same.
 
 ## 0.1.0
 

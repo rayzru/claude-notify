@@ -40,7 +40,7 @@ jobs:
       - name: Package for Apple silicon and Intel
         run: |
           for target in darwin-arm64 darwin-x64; do
-            vsix="claude-notify-$VERSION-$target.vsix"
+            vsix="claude-session-notify-$VERSION-$target.vsix"
             npm run package -- --target "$target" --out "$vsix"
             # Without the app a Mac would fall back to banners nobody can click.
             unzip -l "$vsix" | grep -q 'notify-helper/Contents/MacOS/notify'
@@ -53,9 +53,9 @@ jobs:
           awk -v head="## $VERSION" '$0 == head { on = 1; next } /^## / { on = 0 } on' CHANGELOG.md > notes.md
           gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1 \
             || gh release create "$GITHUB_REF_NAME" --title "Notify for Claude Code $VERSION" --notes-file notes.md
-          gh release upload "$GITHUB_REF_NAME" claude-notify-"$VERSION"-darwin-*.vsix --clobber
+          gh release upload "$GITHUB_REF_NAME" claude-session-notify-"$VERSION"-darwin-*.vsix --clobber
       # Open VSX trusts this workflow only once a version exists and the namespace owner has
       # registered it (RELEASING.md); the repository variable says that has happened.
       - name: Open VSX
         if: vars.OPEN_VSX_TRUSTED == 'true'
-        run: npx ovsx publish --packagePath claude-notify-"$VERSION"-darwin-*.vsix --skip-duplicate --trusted-publishing
+        run: npx ovsx publish --packagePath claude-session-notify-"$VERSION"-darwin-*.vsix --skip-duplicate --trusted-publishing

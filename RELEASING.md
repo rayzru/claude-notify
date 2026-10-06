@@ -47,7 +47,7 @@ claude plugin update claude-notify@rayzru
   ```sh
   export OVSX_PAT=…   # Settings → Access Tokens on open-vsx.org
   npx ovsx create-namespace rayz
-  npx ovsx publish --packagePath claude-notify-<version>-darwin-*.vsix
+  npx ovsx publish --packagePath claude-session-notify-<version>-darwin-*.vsix
   ```
 
   Then, on open-vsx.org under *Settings → Trusted Publishers*, trust GitHub Actions for
