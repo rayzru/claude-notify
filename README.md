@@ -30,7 +30,7 @@ Testing and shipping them is planned — see [Plans](extension/README.md#plans).
 ## Install
 
 ```
-/plugin marketplace add rayzru/claude-notify
+/plugin marketplace add rayzru/claude-session-notify
 /plugin install claude-notify@rayzru
 ```
 
