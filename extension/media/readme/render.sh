@@ -11,4 +11,6 @@ shot notification 500 220
 shot toast 498 150
 shot statusbar 640 90
 shot sessions 700 330
+node "$here/donate/make-html.mjs" >/dev/null
+shot donate 870 330
 echo "rendered into $here"

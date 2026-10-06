@@ -2,7 +2,7 @@
   "name": "claude-session-notify",
   "displayName": "Notify for Claude Code",
   "description": "Know the moment a Claude Code session finishes or needs you, and get back to it in one click. Run several sessions at once and keep them all under control.",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "publisher": "rayz",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -26,6 +26,9 @@
   "homepage": "https://github.com/rayzru/claude-session-notify/tree/main/extension#readme",
   "bugs": {
     "url": "https://github.com/rayzru/claude-session-notify/issues"
+  },
+  "sponsor": {
+    "url": "https://github.com/rayzru/claude-session-notify#support-the-project"
   },
   "main": "./dist/extension.js",
   "activationEvents": [

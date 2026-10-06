@@ -210,6 +210,22 @@ VS Code runs that cleanup after the next restart.
 
 Until then this release installs only on macOS.
 
+## Support the project
+
+Notify for Claude Code is free and open source. If it saves you time, you can support its
+development with a donation:
+
+| Currency | Network | Address |
+| --- | --- | --- |
+| USDC | Solana | `uHftUQ48JKELxBTJsrWqG7Cz4jLv2hgkz9G6jHptJFV` |
+| USDT | TRON (TRC-20) | `TUq4f7MCFvnQBcECteVp9Wun71hqgLrL63` |
+| BTC | Bitcoin | `1DbpWsEA2uxN99jRuy9n2Zi7mYEgbFLVeb` |
+
+![QR codes: USDC on Solana, USDT on TRON (TRC-20), BTC on Bitcoin](media/readme/donate.png)
+
+**Send each currency only on its own network.** Coins sent on any other network — USDT on
+Ethereum, say — cannot be recovered.
+
 ---
 
 Notify for Claude Code is an independent project and is not affiliated with or endorsed by Anthropic.

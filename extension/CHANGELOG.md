@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.1
+
+- A *Sponsor* button on the extension's page, for anyone who wants to support the project.
+  The ways to donate are listed under *Support the project* in the README.
+
 ## 0.2.0
 
 - Nothing to install besides the extension. A small app of its own shows the notifications

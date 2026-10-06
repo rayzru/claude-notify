@@ -179,3 +179,19 @@ When a newer notification replaces an older one for the same session, the old pr
 killed **and its delivered notification is removed**. Skipping that second part leaves a
 notification on screen whose owner is gone, and clicking it makes macOS try to relaunch the
 bundle: `-609`, or *"the application is not open anymore"*.
+
+## Support the project
+
+Notify for Claude Code is free and open source. If it saves you time, you can support its
+development with a donation:
+
+| Currency | Network | Address |
+| --- | --- | --- |
+| USDC | Solana | `uHftUQ48JKELxBTJsrWqG7Cz4jLv2hgkz9G6jHptJFV` |
+| USDT | TRON (TRC-20) | `TUq4f7MCFvnQBcECteVp9Wun71hqgLrL63` |
+| BTC | Bitcoin | `1DbpWsEA2uxN99jRuy9n2Zi7mYEgbFLVeb` |
+
+![QR codes: USDC on Solana, USDT on TRON (TRC-20), BTC on Bitcoin](extension/media/readme/donate.png)
+
+**Send each currency only on its own network.** Coins sent on any other network — USDT on
+Ethereum, say — cannot be recovered.
