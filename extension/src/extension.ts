@@ -387,13 +387,16 @@ function syncConfig(): void {
  * ask once, and remember a "not now" instead of asking on every start.
  */
 async function offerHooks(context: vscode.ExtensionContext, force = false): Promise<void> {
+  // Already connected is a finished step, not a refusal: tick it on the setup page and say so.
   if (pluginInstalled(HOME)) {
     log('the claude-notify Claude Code plugin is installed and brings its own hooks — leaving settings.json alone')
-    if (force) vscode.window.showInformationMessage('Notify for Claude Code: the Claude Code plugin already provides the hooks, nothing to add.')
+    await refreshSetup()
+    if (force) vscode.window.showInformationMessage('Notify for Claude Code: already connected — the claude-notify plugin for Claude Code reports every session. Nothing to change.')
     return
   }
   if (hooksWired(HOME)) {
-    if (force) vscode.window.showInformationMessage('Notify for Claude Code: hooks are already in place.')
+    await refreshSetup()
+    if (force) vscode.window.showInformationMessage('Notify for Claude Code: already connected — the hooks are in place.')
     return
   }
   if (force) {

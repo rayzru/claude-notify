@@ -14,3 +14,6 @@ own runtime — no Node.js needed.
 
 *Notify for Claude Code: Remove hooks from Claude Code settings* takes out exactly these,
 and uninstalling does it for you.
+
+Already using the claude-notify plugin for Claude Code? Its hooks do the same, so the
+extension adds none and nothing notifies twice.

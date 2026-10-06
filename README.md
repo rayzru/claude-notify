@@ -25,6 +25,7 @@ that is used daily and tested.
 The code also builds commands for Windows toasts and for `notify-send` on Linux, and
 `uriScheme` / `extensionId` can be pointed at a VS Code fork. Those paths are covered by
 dry-run tests only — nobody has run them. Treat them as a starting point, not a promise.
+Testing and shipping them is planned — see [Plans](extension/README.md#plans).
 
 ## Install
 

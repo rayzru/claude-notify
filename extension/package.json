@@ -119,7 +119,7 @@
           {
             "id": "connect",
             "title": "Connect to Claude Code",
-            "description": "Claude Code tells other programs about a session only through hooks in ~/.claude/settings.json. This adds four; nothing else in the file changes.\n[Connect](command:claudeNotify.addHooks)",
+            "description": "Claude Code tells other programs about a session only through hooks in ~/.claude/settings.json. This adds four; nothing else in the file changes. With the claude-notify plugin for Claude Code installed, its hooks already do this and the step is done.\n[Connect](command:claudeNotify.addHooks)",
             "media": {
               "markdown": "media/walkthrough/connect.md"
             },
