@@ -92,7 +92,8 @@ opens by itself.
 
 ## Requirements
 
-- **macOS 13 or later.** Windows and Linux are planned; this release installs only on macOS.
+- **macOS 13 or later.** Windows and Linux are planned (see [Plans](#plans)); this release
+  installs only on macOS.
 - The official **Claude Code** extension for VS Code.
 
 That is all. The extension brings the rest: a small app of its own that shows the
@@ -105,7 +106,9 @@ The first time it starts, Notify for Claude Code opens its setup page — *Notif
 Code: Set up…* opens it again. Each step is one button:
 
 1. **Connect to Claude Code.** Adds four hooks to `~/.claude/settings.json`; hooks are the
-   only way Claude Code tells anyone about a session. Nothing else in the file changes.
+   only way Claude Code tells anyone about a session. Nothing else in the file changes. With
+   the claude-notify plugin for Claude Code installed, its hooks already do this and the step
+   is done.
 2. **Allow notifications.** macOS asks once whether *Notify for Claude Code* may show
    notifications.
 3. **Keep them on screen** — optional. With the *Persistent* style a notification stays until
@@ -195,6 +198,17 @@ VS Code runs that cleanup after the next restart.
 - **VS Code cannot take back a notification it has shown.** A newer one does not replace
   the older inside VS Code, and going back to the session does not clear it; old ones stay in
   the notification list until you clear them. Their button still opens the right session.
+
+## Plans
+
+- **Linux.** The notifier already builds a `notify-send` notification, but nobody has run it
+  yet. Next: test it on GNOME and KDE, make a click open the session, and publish Linux
+  packages.
+- **Windows.** The notifier already builds a Windows toast through PowerShell, also never run.
+  Next: test it on Windows 10 and 11, check that a click opens the session, and publish
+  Windows packages.
+
+Until then this release installs only on macOS.
 
 ---
 
