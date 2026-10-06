@@ -10,7 +10,7 @@ import {
   linksDir, pausedUntil, pausePath, pluginInstalled, sessionsDir, setPause, unwireHooks, wireHooks,
   writeConfig, writeRunner, type PauseScope,
 } from './wiring'
-import { ago, markSeen, modelName, ownerOf, readDetails, readSessions, tokens, windowName, type Session } from './sessions'
+import { ago, lastPrompted, markSeen, modelName, ownerOf, readDetails, readSessions, tokens, windowName, type Session } from './sessions'
 import { tabShowsTitle, toastFor } from './toast'
 
 /**
@@ -291,17 +291,21 @@ function editorNotificationsOn(): boolean {
 }
 
 /**
- * The user is already looking at the session: this window has focus and its active tab is the
- * session's own Claude Code tab. A toast would only cover the box they type in. A session kept
- * in the Claude sidebar cannot be told apart this way, so it still gets one.
+ * The user is already looking at the session, so a toast would only cover the box they type
+ * in. The window must have focus. Then either its active tab is the session's own Claude Code
+ * tab, recognised by its label; or Claude lives in the sidebar and this is the session the user
+ * last wrote to in this window. The sidebar shows one session and no API says which, but it is
+ * nearly always that one.
  */
-function sessionInFront(title: string): boolean {
+function sessionInFront(session: string, title: string): boolean {
   if (!vscode.window.state.focused) return false
   const tab = vscode.window.tabGroups.activeTabGroup.activeTab
   const input = tab?.input
-  return input instanceof vscode.TabInputWebview
-    && input.viewType.endsWith('claudeVSCodePanel')
-    && tabShowsTitle(tab!.label, title)
+  if (input instanceof vscode.TabInputWebview && input.viewType.endsWith('claudeVSCodePanel')) {
+    return tabShowsTitle(tab!.label, title)
+  }
+  if (!session || vscode.workspace.getConfiguration('claudeCode').get<string>('preferredLocation') !== 'sidebar') return false
+  return lastPrompted(SESSIONS, (root) => ownerOf(root, linksDir(HOME))?.pid === process.pid) === session
 }
 
 /**
@@ -310,7 +314,7 @@ function sessionInFront(title: string): boolean {
  */
 function notifyHere(context: vscode.ExtensionContext, body: any): boolean {
   if (!editorNotificationsOn()) return false
-  if (sessionInFront(String(body?.title || ''))) {
+  if (sessionInFront(String(body?.session || ''), String(body?.title || ''))) {
     log(`not shown here: "${String(body?.title)}" is the tab in front`)
     return false
   }

@@ -2,8 +2,9 @@
 
 ## 0.2.2
 
-- No notification inside VS Code for the session you are looking at — its tab in front of a
-  focused window. It covered the box you type in. The system notification still comes.
+- No notification inside VS Code for the session you are looking at, in a focused window: its
+  tab in front, or — with Claude in the sidebar — the session you last wrote to there. It
+  covered the box you type in. The system notification still comes.
 
 ## 0.2.1
 

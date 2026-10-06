@@ -204,4 +204,18 @@ test('a session gone to stops waiting; one that is not waiting is left as it is'
   assert.equal(existsSync(join(d, 'missing.json')), false)
 })
 
+test('the session last written to, among those in this window; finished ones count', () => {
+  const d = dir()
+  put(d, 'a', { state: 'done', root: '/work/app', promptedAt: 300 })
+  put(d, 'b', { state: 'running', root: '/work/app/packages/ui', promptedAt: 200 })
+  put(d, 'c', { state: 'running', root: '/work/other', promptedAt: 900 })
+  put(d, 'd', { state: 'running', root: '/work/app' }) // never prompted through the hook
+  const here = (root) => root === '/work/app' || root.startsWith('/work/app/')
+  assert.equal(s.lastPrompted(d, here), 'a')
+  put(d, 'b', { state: 'running', root: '/work/app/packages/ui', promptedAt: 400 })
+  assert.equal(s.lastPrompted(d, here), 'b')
+  assert.equal(s.lastPrompted(d, () => false), '')
+  assert.equal(s.lastPrompted(join(d, 'absent'), here), '')
+})
+
 console.log(`\n${n} passed`)

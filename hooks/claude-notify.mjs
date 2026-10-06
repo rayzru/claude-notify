@@ -739,8 +739,12 @@ function recordSession(event, data) {
   if (event === 'Notification' && isIdleNotice(data)) return
   const cwd = String(data.cwd || '')
   const root = sessionRoot(id, data.transcript_path, cwd)
+  // When the user last wrote to it: the session they last wrote to is the one a window's
+  // Claude sidebar nearly always shows.
+  const promptedAt = event === 'UserPromptSubmit' ? Date.now() : (readJsonFile(path) || {}).promptedAt
   writeState(path, JSON.stringify({
     session: id,
+    ...(promptedAt ? { promptedAt } : {}),
     state: event === 'Notification' ? 'waiting' : 'running',
     message: event === 'Notification' ? String(data.message || '') : '',
     cwd,
