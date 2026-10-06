@@ -54,3 +54,6 @@ claude plugin update claude-notify@rayzru
   `rayzru/claude-session-notify`, workflow `release.yml`, and set the repository variable
   `OPEN_VSX_TRUSTED` to `true` (`gh variable set OPEN_VSX_TRUSTED --body true`). From then on
   the workflow publishes without a stored token, and the access token can be deleted.
+  Until then, an `OVSX_PAT` repository secret holding that access token does the same
+  (`gh secret set OVSX_PAT`). With neither, the release run carries an *Open VSX skipped*
+  warning.

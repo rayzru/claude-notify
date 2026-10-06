@@ -2,7 +2,7 @@
   "name": "claude-session-notify",
   "displayName": "Notify for Claude Code",
   "description": "Know the moment a Claude Code session finishes or needs you, and get back to it in one click. Run several sessions at once and keep them all under control.",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "publisher": "rayz",
   "license": "MIT",
   "icon": "media/icon.png",
@@ -54,6 +54,16 @@
       {
         "command": "claudeNotify.openNotificationSettings",
         "title": "Open notification settings",
+        "category": "Notify for Claude Code"
+      },
+      {
+        "command": "claudeNotify.showWhileSharing",
+        "title": "Show notifications while sharing the screen",
+        "category": "Notify for Claude Code"
+      },
+      {
+        "command": "claudeNotify.chooseQuietTime",
+        "title": "Announce turns longer than…",
         "category": "Notify for Claude Code"
       },
       {
@@ -110,6 +120,10 @@
         {
           "command": "claudeNotify.openNotificationSettings",
           "when": "isMac"
+        },
+        {
+          "command": "claudeNotify.showWhileSharing",
+          "when": "isMac"
         }
       ]
     },
@@ -122,7 +136,7 @@
           {
             "id": "connect",
             "title": "Connect to Claude Code",
-            "description": "Claude Code tells other programs about a session only through hooks in ~/.claude/settings.json. This adds four; nothing else in the file changes. With the claude-notify plugin for Claude Code installed, its hooks already do this and the step is done.\n[Connect](command:claudeNotify.addHooks)",
+            "description": "Claude Code tells other programs about a session only through hooks in ~/.claude/settings.json. This adds four; nothing else in the file changes. Every session reports from its next message, open ones too, and you are told when the first one does. With the claude-notify plugin for Claude Code installed, its hooks already do this and the step is done.\n[Connect](command:claudeNotify.addHooks)",
             "media": {
               "markdown": "media/walkthrough/connect.md"
             },
@@ -156,9 +170,22 @@
             ]
           },
           {
+            "id": "sharing",
+            "title": "Show them while sharing the screen",
+            "when": "isMac",
+            "description": "Optional. While your screen is shared or recorded — a call, a demo — macOS hides every notification. Under Allow notifications, turn on When mirroring or sharing the display.\n[Open notification settings](command:claudeNotify.showWhileSharing)",
+            "media": {
+              "markdown": "media/walkthrough/sharing.md"
+            },
+            "completionEvents": [
+              "onContext:claudeNotify.sharing",
+              "onCommand:claudeNotify.showWhileSharing"
+            ]
+          },
+          {
             "id": "try",
             "title": "Try it",
-            "description": "Start a new Claude session — ones already open were started before the hooks. Give it something that takes longer than 45 seconds and switch away.\n[Send a test notification](command:claudeNotify.test)",
+            "description": "Give Claude something that takes longer than 45 seconds, in any session, and switch to another app. A shorter turn finishes quietly — you were watching it.\n[Send a test notification](command:claudeNotify.test)\n[Choose how long a turn must last](command:claudeNotify.chooseQuietTime)",
             "media": {
               "markdown": "media/walkthrough/try.md"
             },
@@ -179,8 +206,32 @@
         },
         "claudeNotify.minTurnSeconds": {
           "type": "number",
+          "enum": [
+            15,
+            30,
+            45,
+            60,
+            90,
+            120
+          ],
+          "enumItemLabels": [
+            "15 seconds",
+            "30 seconds",
+            "45 seconds",
+            "1 minute",
+            "1.5 minutes",
+            "2 minutes"
+          ],
+          "enumDescriptions": [
+            "Almost every turn is announced.",
+            "Most turns are announced.",
+            "Turns long enough to look away from. The default.",
+            "Only longer turns.",
+            "Few notifications.",
+            "Only the long ones — for those who dislike being interrupted."
+          ],
           "default": 45,
-          "description": "A turn shorter than this finishes quietly — you were watching it. 0 announces every turn."
+          "description": "Announce a finished turn only when it took longer than this. A shorter one finishes quietly — you were watching it. Longer means fewer notifications."
         },
         "claudeNotify.events": {
           "type": "array",

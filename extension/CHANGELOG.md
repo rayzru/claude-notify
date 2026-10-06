@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.2.3
+
+- Not connected to Claude Code yet? Every start says so, with *Connect* and a way back to
+  the setup page, instead of asking once and staying quiet after a "Not now". Connecting
+  starts the hooks once to check they run, and says so when the first session reports.
+  Sessions already open report from their next message; the setup page no longer asks for
+  a new one.
+- How long a turn must last to be announced is a choice: 15, 30 or 45 seconds, 1, 1.5 or
+  2 minutes, 45 seconds by default. In the settings, or *Announce turns longer than…* from
+  the command palette and the bottom of the session list.
+- macOS hides every notification while the screen is shared or recorded. A new, optional
+  setup step explains it and opens the page with *When mirroring or sharing the display*;
+  the test notification and *Check that notifications work* mention it while it is off.
+- With the claude-notify plugin for Claude Code installed but switched off, the extension
+  adds its own hooks. It used to count the plugin as connected, and nothing reported.
+- *Check that notifications work* no longer reports the extension's own hooks as wired
+  twice, and reads VS Code settings with comments and trailing commas.
+- Uninstalling leaves nothing behind. Besides the hooks, script and app, it now withdraws
+  the notifications still on screen and removes the session list, the debug log, the
+  per-turn state in the temp folder and the config file. The config file stays while the
+  claude-notify plugin for Claude Code is installed, because it holds that plugin's settings
+  too.
+- After an uninstall, installing again is a first start: the setup page opens again. VS Code
+  had kept the extension's memory of it.
+
 ## 0.2.2
 
 - No notification inside VS Code for the session you are looking at, in a focused window: its

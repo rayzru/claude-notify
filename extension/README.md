@@ -38,7 +38,8 @@ the flaky test and pushed the branch.* Enough to know what happened without swit
   open — in its tab, or in the Claude sidebar if that is where you keep it. It never opens a
   second view of a session.
 - **A short turn stays quiet.** If a turn took less than 45 seconds you were watching it
-  arrive, so nothing fires. Adjustable.
+  arrive, so nothing fires. Pick from 15 seconds to 2 minutes — fewer notifications the
+  longer it is.
 - **One notification per event, and per session.** Claude Code also reports a session as
   "waiting for your input" some minutes after a turn; that is the same news as *Done*, so it
   is not shown again and does not light the status bar. A newer notification replaces the
@@ -108,14 +109,18 @@ Code: Set up…* opens it again. Each step is one button:
 1. **Connect to Claude Code.** Adds four hooks to `~/.claude/settings.json`; hooks are the
    only way Claude Code tells anyone about a session. Nothing else in the file changes. With
    the claude-notify plugin for Claude Code installed, its hooks already do this and the step
-   is done.
+   is done. Until it is, every start says so, with a button back to this page. Connecting
+   starts the hooks once to check they run, and tells you when the first session reports.
 2. **Allow notifications.** macOS asks once whether *Notify for Claude Code* may show
    notifications.
 3. **Keep them on screen** — optional. With the *Persistent* style a notification stays until
    you deal with it; the step ticks itself once that is set.
-4. **Try it.** Start a new Claude session — ones already open were started before the hooks —
-   and give it something that takes longer than 45 seconds. A shorter turn finishes quietly,
-   because you were watching it.
+4. **Show them while sharing the screen** — optional. While the screen is shared in a call or
+   recorded, macOS hides every notification. The button opens the page with the switch:
+   *Allow notifications → When mirroring or sharing the display*.
+5. **Try it.** Give Claude something that takes longer than 45 seconds, in any session — open
+   ones report too — and switch to another app. A shorter turn finishes quietly, because you
+   were watching it.
 
 If something does not arrive, *Notify for Claude Code: Check that notifications work* names
 what is missing.
@@ -128,12 +133,14 @@ what is missing.
 | Notify for Claude Code: Set up… | the setup page: connect, allow notifications, try it |
 | Notify for Claude Code: Allow notifications | asks macOS, as the setup page does |
 | Notify for Claude Code: Open notification settings | this app's page in System Settings → Notifications |
+| Notify for Claude Code: Show notifications while sharing the screen | the System Settings page with *When mirroring or sharing the display* |
+| Notify for Claude Code: Announce turns longer than… | 15 seconds to 2 minutes — also at the bottom of the session list |
 | Notify for Claude Code: Send a test notification | one notification, to check it appears — it belongs to no session, so it has nothing to open |
 | Notify for Claude Code: Check that notifications work | checks everything below and names what is broken |
 | Notify for Claude Code: Turn notifications on or off | master switch |
 | Notify for Claude Code: Pause notifications… | all of them or only the ones inside VS Code, for a while — also at the bottom of the session list |
 | Notify for Claude Code: Resume notifications | lifts any pause |
-| Notify for Claude Code: Add hooks to Claude Code settings | if you said "Not now" at first |
+| Notify for Claude Code: Add hooks to Claude Code settings | connects, as the setup page does |
 | Notify for Claude Code: Remove hooks from Claude Code settings | takes out only what it added |
 
 ## Settings
@@ -141,7 +148,7 @@ what is missing.
 | Setting | Default | |
 | --- | --- | --- |
 | `claudeNotify.enabled` | `true` | master switch |
-| `claudeNotify.minTurnSeconds` | `45` | shorter turns finish quietly; `0` announces every turn |
+| `claudeNotify.minTurnSeconds` | `45` | 15, 30, 45 seconds, 1, 1.5 or 2 minutes; shorter turns finish quietly |
 | `claudeNotify.events` | all | `done`, `error`, `waitingInput` |
 | `claudeNotify.style` | `alert` | `alert` stays until answered, `banner` fades out |
 | `claudeNotify.sound` | `true` | |
@@ -179,10 +186,21 @@ Nothing leaves your machine. There is no telemetry.
 
 ## Uninstalling
 
-Uninstalling removes the hooks, the copied script, the notifying app and the link files.
-VS Code runs that cleanup after the next restart.
+Uninstalling leaves nothing behind: the hooks, the notifications still on screen, the
+copied script, the notifying app, the session list, the pause, the debug log, the per-turn
+state in the temp folder and the config file. With the claude-notify plugin for Claude Code
+installed, the config file stays, because it holds the plugin's settings too. VS Code runs
+that cleanup after the next restart.
+
+Two things are outside its reach. VS Code keeps your `claudeNotify.*` settings, as it does
+for every extension. macOS keeps *Notify for Claude Code* under System Settings →
+Notifications, with whatever you allowed, so a reinstall does not ask again.
 
 ## Known limits
+
+- **Nothing shows while the screen is shared.** macOS hides every notification while the
+  screen is mirrored, shared in a call or recorded, unless *System Settings → Notifications →
+  When mirroring or sharing the display* is on. The setup page links to it.
 
 - **Context is shown as a size, not a percentage.** The transcript rarely says how large the
   model's window is, and a guessed percentage would be worse than an honest number.
