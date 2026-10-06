@@ -1,0 +1,5 @@
+[
+  { "currency": "USDC", "network": "Solana", "address": "uHftUQ48JKELxBTJsrWqG7Cz4jLv2hgkz9G6jHptJFV" },
+  { "currency": "USDT", "network": "TRON (TRC-20)", "address": "TUq4f7MCFvnQBcECteVp9Wun71hqgLrL63" },
+  { "currency": "BTC", "network": "Bitcoin", "address": "1DbpWsEA2uxN99jRuy9n2Zi7mYEgbFLVeb" }
+]
