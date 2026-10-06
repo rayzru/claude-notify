@@ -19,7 +19,7 @@ This repository ships two things with versions of their own: the VS Code extensi
    It makes two packages, `darwin-arm64` and `darwin-x64`, both carrying the same universal
    app, creates the GitHub release with both attached, and publishes them to Open VSX.
 4. **VS Code Marketplace, by hand:** download both `.vsix` files from the release, then on
-   [the publisher page](https://marketplace.visualstudio.com/manage/publishers/rayzru) open
+   [the publisher page](https://marketplace.visualstudio.com/manage/publishers/rayz) open
    the extension's **⋯** menu → **Update** and upload them. Microsoft's global access tokens
    stop working on 1 December 2026, which is why this step is not automated.
 
@@ -37,16 +37,16 @@ claude plugin update claude-notify@rayzru
 
 ## One-time setup
 
-- **VS Code Marketplace:** publisher `rayzru`, created at
+- **VS Code Marketplace:** publisher `rayz`, created at
   [marketplace.visualstudio.com/manage](https://marketplace.visualstudio.com/manage) with the
   Microsoft account it belongs to. The first version is uploaded there as a new extension.
 - **Open VSX:** an Eclipse account with the GitHub user `rayzru`, the Publisher Agreement
-  signed on [open-vsx.org](https://open-vsx.org), and the namespace `rayzru`, created and
-  first published with an access token:
+  signed on [open-vsx.org](https://open-vsx.org), and the namespace `rayz` — named after the
+  extension's publisher — created and first published with an access token:
 
   ```sh
   export OVSX_PAT=…   # Settings → Access Tokens on open-vsx.org
-  npx ovsx create-namespace rayzru
+  npx ovsx create-namespace rayz
   npx ovsx publish --packagePath claude-notify-<version>-darwin-*.vsix
   ```
 
