@@ -21,6 +21,28 @@ export interface Session {
   at: number
 }
 
+/**
+ * The session the user last sent a prompt to, among those `inWindow` accepts by the folder
+ * they were started in. Finished sessions count too — that is when it is asked.
+ */
+export function lastPrompted(dir: string, inWindow: (root: string) => boolean): string {
+  let names: string[] = []
+  try { names = readdirSync(dir) } catch { return '' }
+  let best = ''
+  let bestAt = -1
+  for (const name of names) {
+    if (!name.endsWith('.json')) continue
+    const s = readJson(join(dir, name))
+    if (!s || typeof s.promptedAt !== 'number' || !s.session) continue
+    if (!inWindow(String(s.root || s.cwd || ''))) continue
+    if (s.promptedAt > bestAt) {
+      best = String(s.session)
+      bestAt = s.promptedAt
+    }
+  }
+  return best
+}
+
 export interface Details {
   title: string
   model: string

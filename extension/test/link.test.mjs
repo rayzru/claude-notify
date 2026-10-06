@@ -53,10 +53,16 @@ assert.equal(entry(A).project, 'ui')
 assert.equal(entry(A).transcript, '/t/a.jsonl')
 ok('a prompt puts the session on the list as running, with its folder and transcript')
 
+const prompted = entry(A).promptedAt
+assert.ok(prompted > Date.now() - 60_000 && prompted <= Date.now())
+ok('and remembers when the user last wrote to it')
+
 await hook({ hook_event_name: 'Notification', session_id: A, cwd: '/work/app/packages/ui', message: 'Claude needs your permission to use Bash' })
 assert.equal(entry(A).state, 'waiting')
 assert.equal(entry(A).message, 'Claude needs your permission to use Bash')
 ok('a notification marks it waiting, with what it is waiting for')
+assert.equal(entry(A).promptedAt, prompted)
+ok('without forgetting when the user last wrote to it')
 
 await hook({ hook_event_name: 'Notification', session_id: B, cwd: '/work/planner', message: 'x', agent_id: 'sub' })
 assert.equal(entry(B), null)
