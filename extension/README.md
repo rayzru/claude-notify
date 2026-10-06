@@ -1,8 +1,18 @@
-# Claude Notify
+# Notify for Claude Code
 
-Run several Claude Code sessions at once without watching any of them. Claude Notify
-tells you when a session **finished** and when one is **waiting for you** — a permission,
-a question — and a click on the notification brings that session's tab to the front.
+**Run several Claude Code sessions. Keep every one of them under control.**
+
+Claude works while you do something else. Notify for Claude Code tells you the moment a
+session finishes or needs you — a permission, a question — and one click takes you straight
+back to it, in whichever window it lives.
+
+![macOS notifications: one session done, another waiting for permission](media/readme/notification.png)
+
+- **On time.** A notification the moment a session is done or waiting, with what it asks or
+  how its answer began.
+- **One click back.** Straight to that session, where it already is.
+- **Everything in view.** *✻* in the status bar counts what is running and what is waiting,
+  across every window.
 
 ## Why
 
@@ -11,6 +21,8 @@ puts a badge on its session list, but only while that window is in front of you.
 three sessions running, you end up checking each one by hand.
 
 ## What you get
+
+### A notification when it is your turn
 
 | When | Notification |
 | --- | --- |
@@ -22,6 +34,9 @@ Each one is titled with the session's name — the one Claude Code shows on its 
 the project underneath, and carries how the model's last answer began: *Done · 12 min — Fixed
 the flaky test and pushed the branch.* Enough to know what happened without switching.
 
+- **Click to switch.** The click brings that session's window to the front with the session
+  open — in its tab, or in the Claude sidebar if that is where you keep it. It never opens a
+  second view of a session.
 - **A short turn stays quiet.** If a turn took less than 45 seconds you were watching it
   arrive, so nothing fires. Adjustable.
 - **One notification per event, and per session.** Claude Code also reports a session as
@@ -29,57 +44,94 @@ the flaky test and pushed the branch.* Enough to know what happened without swit
   is not shown again and does not light the status bar. A newer notification replaces the
   older one, and going back to a session clears its old one — nothing stale is left in the
   stack for a click to land on by mistake.
-- **Click to switch.** The click goes straight to that session's tab.
-- **Every session, from every window.** The status bar counts what is running and what is
-  waiting across all your VS Code windows. Click it for the full list:
 
-  | | |
-  | --- | --- |
-  | **who** | the session's title, the same one Claude Code shows |
-  | **where** | the project it was started in and which window has it — plus where it is working now, if it moved on to another repository |
-  | **state** | waiting for you — with what it is asking — or running, and for how long |
-  | **size** | model and how much context the session is carrying |
+### The same, inside VS Code
 
-  Pick one and its window comes to the front with that session open — in its tab if it has
-  one, otherwise by switching the Claude sidebar to it when that is where you keep Claude
-  (`claudeCode.preferredLocation: "sidebar"`). It never opens a second view of a session. A session that no
-  window has open — started in a terminal, or in a window you closed — is listed as such,
-  and picking it offers to open its folder instead of guessing a window. A notification
-  for such a session does nothing on click rather than open windows you did not ask for.
+![The notification inside VS Code, with an Open session button](media/readme/toast.png)
+
+The window that holds the session shows it too. Its *Open session* button, or the session's
+name in it, does what a click on the system notification does.
+
+### Every session in view
+
+![The status bar: two sessions running; then one waiting for you, highlighted](media/readme/statusbar.png)
+
+*✻* in the status bar counts what is running and what is waiting across all your VS Code
+windows, and lights up while a session waits for you. Click it for the full list:
+
+![The session list: every Claude Code session in every window](media/readme/sessions.png)
+
+| | |
+| --- | --- |
+| **who** | the session's title, the same one Claude Code shows |
+| **where** | the project it was started in and which window has it — plus where it is working now, if it moved on to another repository |
+| **state** | waiting for you — with what it is asking — or running, and for how long |
+| **size** | model and how much context the session is carrying |
+
+Pick one and its window comes to the front with that session open. A session that no window
+has open — started in a terminal, or in a window you closed — is listed as such, and picking
+it offers to open its folder instead of guessing a window. A notification for such a session
+does nothing on click rather than open windows you did not ask for.
+
+### Quiet when you need it
+
+Pause for 15 minutes, an hour, three hours or until you resume — every notification, or only
+the ones inside VS Code. A pause holds in every window, shows as a crossed-out bell in the
+status bar, and sessions keep being counted meanwhile.
+
+## Install
+
+Search for **Notify for Claude Code** in the Extensions view, or run
+
+```sh
+code --install-extension rayzru.claude-notify
+```
+
+It is on [Open VSX](https://open-vsx.org/extension/rayzru/claude-notify) too. The setup page
+opens by itself.
 
 ## Requirements
 
-- **macOS.** That is the only platform this is built and tested for.
+- **macOS 13 or later.** Windows and Linux are planned; this release installs only on macOS.
 - The official **Claude Code** extension for VS Code.
-- **Node.js 18+** on your `PATH` — Claude Code runs the hook with it.
-- [`terminal-notifier`](https://github.com/julienXX/terminal-notifier):
-  `brew install terminal-notifier`. Without it notifications still appear, but cannot be
-  clicked.
 
-## First run
+That is all. The extension brings the rest: a small app of its own that shows the
+notifications, and a runner that starts the notifier with VS Code's own runtime. No Node.js,
+no Homebrew, nothing else to install.
 
-Two one-time prompts, both expected:
+## Setup
 
-1. **Claude Notify asks to add four hooks** to `~/.claude/settings.json`. That file
-   belongs to Claude Code, and hooks are the only way it tells anyone about a session, so
-   the extension asks rather than editing it quietly. Nothing else in the file changes.
-   Sessions started after that will report.
-2. **macOS asks whether `terminal-notifier` may show notifications.** Allow it, and in
-   *System Settings → Notifications → terminal-notifier* set the style to **Persistent**
-   (called *Alerts* on older macOS): the default makes them slide away after a few seconds. If it never asks,
-   macOS skipped the prompt because the tool was first run from a script — run
-   *Claude Notify: Check that notifications work* and it will say what to do.
+The first time it starts, Notify for Claude Code opens its setup page — *Notify for Claude
+Code: Set up…* opens it again. Each step is one button:
+
+1. **Connect to Claude Code.** Adds four hooks to `~/.claude/settings.json`; hooks are the
+   only way Claude Code tells anyone about a session. Nothing else in the file changes.
+2. **Allow notifications.** macOS asks once whether *Notify for Claude Code* may show
+   notifications.
+3. **Keep them on screen** — optional. With the *Persistent* style a notification stays until
+   you deal with it; the step ticks itself once that is set.
+4. **Try it.** Start a new Claude session — ones already open were started before the hooks —
+   and give it something that takes longer than 45 seconds. A shorter turn finishes quietly,
+   because you were watching it.
+
+If something does not arrive, *Notify for Claude Code: Check that notifications work* names
+what is missing.
 
 ## Commands
 
 | Command | What it does |
 | --- | --- |
-| Claude Notify: Go to a session | the list of every active session — the same as clicking the status bar |
-| Claude Notify: Send a test notification | one notification, to check it appears and the click works |
-| Claude Notify: Check that notifications work | checks everything below and names what is broken |
-| Claude Notify: Turn notifications on or off | master switch |
-| Claude Notify: Add hooks to Claude Code settings | if you said "Not now" at first |
-| Claude Notify: Remove hooks from Claude Code settings | takes out only what it added |
+| Notify for Claude Code: Go to a session | the list of every active session — the same as clicking the status bar |
+| Notify for Claude Code: Set up… | the setup page: connect, allow notifications, try it |
+| Notify for Claude Code: Allow notifications | asks macOS, as the setup page does |
+| Notify for Claude Code: Open notification settings | this app's page in System Settings → Notifications |
+| Notify for Claude Code: Send a test notification | one notification, to check it appears — it belongs to no session, so it has nothing to open |
+| Notify for Claude Code: Check that notifications work | checks everything below and names what is broken |
+| Notify for Claude Code: Turn notifications on or off | master switch |
+| Notify for Claude Code: Pause notifications… | all of them or only the ones inside VS Code, for a while — also at the bottom of the session list |
+| Notify for Claude Code: Resume notifications | lifts any pause |
+| Notify for Claude Code: Add hooks to Claude Code settings | if you said "Not now" at first |
+| Notify for Claude Code: Remove hooks from Claude Code settings | takes out only what it added |
 
 ## Settings
 
@@ -90,17 +142,21 @@ Two one-time prompts, both expected:
 | `claudeNotify.events` | all | `done`, `error`, `waitingInput` |
 | `claudeNotify.style` | `alert` | `alert` stays until answered, `banner` fades out |
 | `claudeNotify.sound` | `true` | |
+| `claudeNotify.editorNotifications` | `true` | the same notification inside the window that holds the session |
 | `claudeNotify.statusBar` | `true` | running and waiting sessions in the status bar |
 
 ## How it works
 
 Claude Code runs a small script on four events. The script times the turn, decides
-whether it is worth a notification, and shows one through `terminal-notifier`. The command a
-click should run is stored inside that notification, and nothing stays behind waiting for an
-answer: macOS hands a click to any running copy of the same app, so a waiting process per
-notification ends up answering clicks meant for another one. An
-extension cannot show a system notification itself — VS Code has no API for it — which is
-why the script does that part.
+whether it is worth a notification, and shows one. It runs with VS Code's own runtime,
+started by `~/.claude/claude-notify/claude-notify`, so no Node.js is needed.
+
+An extension cannot show a system notification itself — VS Code has no API for it — and
+macOS gives every notification to an app: it shows that app's name and icon, and asks once
+whether that app may notify. So the extension brings a small app of its own, *Notify for
+Claude Code*, and keeps it at `~/.claude/claude-notify/`. The command a click should run is
+stored inside the notification, and nothing stays behind waiting for an answer: macOS
+relaunches the app to deliver the click.
 
 Each VS Code window's extension listens on a loopback port that only this machine can
 reach, guarded by a random token, and records its port and workspace folders under
@@ -120,8 +176,8 @@ Nothing leaves your machine. There is no telemetry.
 
 ## Uninstalling
 
-Uninstalling removes the hooks, the copied script and the link file. VS Code runs that
-cleanup after the next restart.
+Uninstalling removes the hooks, the copied script, the notifying app and the link files.
+VS Code runs that cleanup after the next restart.
 
 ## Known limits
 
@@ -136,3 +192,10 @@ cleanup after the next restart.
   If a future release renames it, clicks fall back to a `vscode://` link, which works
   after VS Code asks once.
 - **Sessions in a plain terminal** have no tab to switch to. They still notify.
+- **VS Code cannot take back a notification it has shown.** A newer one does not replace
+  the older inside VS Code, and going back to the session does not clear it; old ones stay in
+  the notification list until you clear them. Their button still opens the right session.
+
+---
+
+Notify for Claude Code is an independent project and is not affiliated with or endorsed by Anthropic.

@@ -1,0 +1,61 @@
+name: Release
+
+# Push a tag named after the version in extension/package.json (ext-v0.2.0) to cut a release:
+# the Claude Code plugin in this repository has versions of its own.
+# It is built for macOS only, as two packages — Apple silicon and Intel — that carry the same
+# universal notifying app; the Marketplace offers a package only on its platform. They go to
+# a GitHub release and to Open VSX; the VS Code Marketplace takes the same files by hand,
+# uploaded from the release page.
+on:
+  push:
+    tags: ['ext-v*']
+
+permissions:
+  contents: write # the GitHub release
+  id-token: write # Open VSX trusted publishing: no stored token
+
+jobs:
+  release:
+    runs-on: macos-latest # the notifying app is compiled with Swift
+    defaults:
+      run:
+        working-directory: extension
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22 # vsce 4 needs it
+          cache: npm
+          cache-dependency-path: extension/package-lock.json
+      - run: npm ci
+      - run: npm test
+      - name: The tag names the version in package.json
+        run: |
+          version=$(node -p "require('./package.json').version")
+          if [ "ext-v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::tag $GITHUB_REF_NAME, but extension/package.json says $version"
+            exit 1
+          fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+      - name: Package for Apple silicon and Intel
+        run: |
+          for target in darwin-arm64 darwin-x64; do
+            vsix="claude-notify-$VERSION-$target.vsix"
+            npm run package -- --target "$target" --out "$vsix"
+            # Without the app a Mac would fall back to banners nobody can click.
+            unzip -l "$vsix" | grep -q 'notify-helper/Contents/MacOS/notify'
+          done
+      # Re-running a failed job must not trip over a release it already made.
+      - name: GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          awk -v head="## $VERSION" '$0 == head { on = 1; next } /^## / { on = 0 } on' CHANGELOG.md > notes.md
+          gh release view "$GITHUB_REF_NAME" > /dev/null 2>&1 \
+            || gh release create "$GITHUB_REF_NAME" --title "Notify for Claude Code $VERSION" --notes-file notes.md
+          gh release upload "$GITHUB_REF_NAME" claude-notify-"$VERSION"-darwin-*.vsix --clobber
+      # Open VSX trusts this workflow only once a version exists and the namespace owner has
+      # registered it (RELEASING.md); the repository variable says that has happened.
+      - name: Open VSX
+        if: vars.OPEN_VSX_TRUSTED == 'true'
+        run: npx ovsx publish --packagePath claude-notify-"$VERSION"-darwin-*.vsix --skip-duplicate --trusted-publishing

@@ -1,0 +1,27 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: macos-latest # the notifying app is compiled with Swift
+    defaults:
+      run:
+        working-directory: extension
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22 # vsce 4 needs it
+          cache: npm
+          cache-dependency-path: extension/package-lock.json
+      - run: npm ci
+      - run: npx tsc --noEmit -p .
+      - run: npm test
+      - name: The extension still packages, with its notifying app
+        run: |
+          npm run package -- --target darwin-arm64 --out claude-notify.vsix
+          unzip -l claude-notify.vsix | grep -q 'notify-helper/Contents/MacOS/notify'

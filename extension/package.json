@@ -1,10 +1,11 @@
 {
   "name": "claude-notify",
-  "displayName": "Claude Notify",
-  "description": "Tells you when a Claude Code session finished and when one is waiting for you. Clicking the notification brings that session's tab to the front.",
-  "version": "0.1.0",
+  "displayName": "Notify for Claude Code",
+  "description": "Know the moment a Claude Code session finishes or needs you, and get back to it in one click. Run several sessions at once and keep them all under control.",
+  "version": "0.2.0",
   "publisher": "rayzru",
   "license": "MIT",
+  "icon": "media/icon.png",
   "engines": {
     "vscode": "^1.90.0"
   },
@@ -19,7 +20,12 @@
   ],
   "repository": {
     "type": "git",
-    "url": "https://github.com/rayzru/claude-notify.git"
+    "url": "https://github.com/rayzru/claude-notify.git",
+    "directory": "extension"
+  },
+  "homepage": "https://github.com/rayzru/claude-notify/tree/main/extension#readme",
+  "bugs": {
+    "url": "https://github.com/rayzru/claude-notify/issues"
   },
   "main": "./dist/extension.js",
   "activationEvents": [
@@ -29,31 +35,139 @@
     "commands": [
       {
         "command": "claudeNotify.showSessions",
-        "title": "Claude Notify: Go to a session"
+        "title": "Go to a session",
+        "category": "Notify for Claude Code"
+      },
+      {
+        "command": "claudeNotify.setup",
+        "title": "Set up…",
+        "category": "Notify for Claude Code"
+      },
+      {
+        "command": "claudeNotify.allowNotifications",
+        "title": "Allow notifications",
+        "category": "Notify for Claude Code"
+      },
+      {
+        "command": "claudeNotify.openNotificationSettings",
+        "title": "Open notification settings",
+        "category": "Notify for Claude Code"
       },
       {
         "command": "claudeNotify.test",
-        "title": "Claude Notify: Send a test notification"
+        "title": "Send a test notification",
+        "category": "Notify for Claude Code"
       },
       {
         "command": "claudeNotify.doctor",
-        "title": "Claude Notify: Check that notifications work"
+        "title": "Check that notifications work",
+        "category": "Notify for Claude Code"
       },
       {
         "command": "claudeNotify.toggle",
-        "title": "Claude Notify: Turn notifications on or off"
+        "title": "Turn notifications on or off",
+        "category": "Notify for Claude Code"
+      },
+      {
+        "command": "claudeNotify.pause",
+        "title": "Pause notifications…",
+        "category": "Notify for Claude Code"
+      },
+      {
+        "command": "claudeNotify.resume",
+        "title": "Resume notifications",
+        "category": "Notify for Claude Code"
       },
       {
         "command": "claudeNotify.addHooks",
-        "title": "Claude Notify: Add hooks to Claude Code settings"
+        "title": "Add hooks to Claude Code settings",
+        "category": "Notify for Claude Code"
       },
       {
         "command": "claudeNotify.removeHooks",
-        "title": "Claude Notify: Remove hooks from Claude Code settings"
+        "title": "Remove hooks from Claude Code settings",
+        "category": "Notify for Claude Code"
+      },
+      {
+        "command": "claudeNotify.openSession",
+        "title": "Open a session",
+        "category": "Notify for Claude Code"
+      }
+    ],
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "claudeNotify.openSession",
+          "when": "false"
+        },
+        {
+          "command": "claudeNotify.allowNotifications",
+          "when": "isMac"
+        },
+        {
+          "command": "claudeNotify.openNotificationSettings",
+          "when": "isMac"
+        }
+      ]
+    },
+    "walkthroughs": [
+      {
+        "id": "setup",
+        "title": "Set up Notify for Claude Code",
+        "description": "Get notified on time and keep every Claude Code session under control.",
+        "steps": [
+          {
+            "id": "connect",
+            "title": "Connect to Claude Code",
+            "description": "Claude Code tells other programs about a session only through hooks in ~/.claude/settings.json. This adds four; nothing else in the file changes.\n[Connect](command:claudeNotify.addHooks)",
+            "media": {
+              "markdown": "media/walkthrough/connect.md"
+            },
+            "completionEvents": [
+              "onContext:claudeNotify.connected"
+            ]
+          },
+          {
+            "id": "allow",
+            "title": "Allow notifications",
+            "when": "isMac",
+            "description": "macOS asks once whether Notify for Claude Code may show notifications. Choose Allow.\n[Allow notifications](command:claudeNotify.allowNotifications)",
+            "media": {
+              "markdown": "media/walkthrough/allow.md"
+            },
+            "completionEvents": [
+              "onContext:claudeNotify.allowed"
+            ]
+          },
+          {
+            "id": "persistent",
+            "title": "Keep them on screen",
+            "when": "isMac",
+            "description": "Optional. With the Persistent style a notification stays until you deal with it, instead of sliding away after a few seconds.\n[Open notification settings](command:claudeNotify.openNotificationSettings)",
+            "media": {
+              "markdown": "media/walkthrough/persistent.md"
+            },
+            "completionEvents": [
+              "onContext:claudeNotify.persistent",
+              "onCommand:claudeNotify.openNotificationSettings"
+            ]
+          },
+          {
+            "id": "try",
+            "title": "Try it",
+            "description": "Start a new Claude session — ones already open were started before the hooks. Give it something that takes longer than 45 seconds and switch away.\n[Send a test notification](command:claudeNotify.test)",
+            "media": {
+              "markdown": "media/walkthrough/try.md"
+            },
+            "completionEvents": [
+              "onCommand:claudeNotify.test"
+            ]
+          }
+        ]
       }
     ],
     "configuration": {
-      "title": "Claude Notify",
+      "title": "Notify for Claude Code",
       "properties": {
         "claudeNotify.enabled": {
           "type": "boolean",
@@ -100,6 +214,11 @@
           "default": true,
           "description": "Play a sound with the notification."
         },
+        "claudeNotify.editorNotifications": {
+          "type": "boolean",
+          "default": true,
+          "description": "Also show each notification inside the VS Code window that holds the session, with a button that opens it."
+        },
         "claudeNotify.statusBar": {
           "type": "boolean",
           "default": true,
@@ -111,15 +230,17 @@
   "scripts": {
     "build": "node esbuild.mjs",
     "watch": "node esbuild.mjs --watch",
-    "package": "npx @vscode/vsce package --no-dependencies",
+    "package": "vsce package --no-dependencies --baseImagesUrl https://github.com/rayzru/claude-notify/raw/HEAD/extension --baseContentUrl https://github.com/rayzru/claude-notify/blob/HEAD/extension",
     "vscode:prepublish": "npm run build",
     "vscode:uninstall": "node ./dist/uninstall.js",
-    "test": "esbuild src/wiring.ts src/sessions.ts --bundle --platform=node --format=esm --outdir=test/.build --out-extension:.js=.mjs --log-level=warning && node test/wiring.test.mjs && node test/sessions.test.mjs && node test/link.test.mjs"
+    "test": "esbuild src/wiring.ts src/sessions.ts src/toast.ts --bundle --platform=node --format=esm --outdir=test/.build --out-extension:.js=.mjs --log-level=warning && node test/wiring.test.mjs && node test/sessions.test.mjs && node test/toast.test.mjs && node test/link.test.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
     "@types/vscode": "^1.90.0",
+    "@vscode/vsce": "^4.0.0",
     "esbuild": "^0.24.0",
+    "ovsx": "^1.2.0",
     "typescript": "^5.6.0"
   }
 }

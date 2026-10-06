@@ -4,6 +4,12 @@ A Claude Code plugin that tells you when a session **finished** and when one is 
 for you**, so you can run several sessions at once without babysitting any of them.
 Clicking the notification brings that session's tab to the front.
 
+![macOS notifications: one session done, another waiting for permission](extension/media/readme/notification.png)
+
+**Using VS Code?** The extension [Notify for Claude Code](extension/README.md) does all of
+this with nothing else to install, and adds the same notification inside VS Code and every
+session at a glance in the status bar.
+
 ## Why
 
 Claude Code does not signal a session you are not looking at. The VS Code extension puts a
@@ -41,20 +47,24 @@ does not work — it is faster than guessing.
 
 ### Requirements
 
-- Node 18 or newer.
-- [`terminal-notifier`](https://github.com/julienXX/terminal-notifier)
-  (`brew install terminal-notifier`). Without it notifications still appear through
-  `osascript`, but they cannot be clicked.
+- **Node 18 or newer** — the plugin's hooks run with it.
+- **Something to show the notifications**, one of:
+  - **The VS Code extension *Notify for Claude Code*** — recommended. The plugin then shows
+    notifications through the extension's own small app, under its own name and icon, and
+    there is nothing else to install. The extension also adds the same notification inside
+    VS Code, every session in the status bar, and a setup page that walks through the rest.
+    It needs no Node.js itself; used without this plugin, it adds hooks of its own.
+  - **[`terminal-notifier`](https://github.com/julienXX/terminal-notifier)**
+    (`brew install terminal-notifier`). macOS will not show its notifications until it has
+    been granted permission, and it never asks when it is first run from a script. Launch it
+    once by hand and answer the prompt:
 
-macOS will not show notifications from `terminal-notifier` until it has been granted
-permission, and it never asks when it is first run from a script. Launch its bundle once by
-hand and answer the prompt:
+    ```sh
+    open -a "$(brew --prefix terminal-notifier)/terminal-notifier.app" --args -message hi
+    ```
 
-```sh
-open -a /opt/homebrew/Cellar/terminal-notifier/*/terminal-notifier.app --args -message hi
-```
-
-`/claude-notify:doctor` detects this exact state and says so.
+  Without either, notifications still appear through `osascript`, but they cannot be
+  clicked. `/claude-notify:doctor` says which one is in use and what is missing.
 
 ## What you get
 
@@ -123,6 +133,7 @@ single entry in the `STRINGS` table at the top of the script — eight short str
 | `/claude-notify:doctor` | check the environment and explain whatever is broken |
 | `/claude-notify:test` | send one notification and verify the click |
 | `/claude-notify:config` | show the effective settings, or change one |
+| `/claude-notify:pause` | pause notifications for a while, or resume them — `/claude-notify:pause 30` |
 
 The script is also a plain CLI, which is what those commands call:
 
@@ -132,6 +143,8 @@ hooks/claude-notify.mjs --test          # sample notification
 hooks/claude-notify.mjs --config        # effective settings and detected language
 hooks/claude-notify.mjs --init-config   # write a config file with the defaults
 hooks/claude-notify.mjs --list          # delivered notifications
+hooks/claude-notify.mjs --pause [minutes] [--editor]   # quiet for a while; no minutes = until --resume
+hooks/claude-notify.mjs --resume        # notifications back on
 hooks/claude-notify.mjs --help
 ```
 

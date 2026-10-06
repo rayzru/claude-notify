@@ -1,4 +1,4 @@
-import { closeSync, existsSync, fstatSync, openSync, readdirSync, readFileSync, readSync, statSync, unlinkSync } from 'node:fs'
+import { closeSync, existsSync, fstatSync, openSync, readdirSync, readFileSync, readSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { basename, join } from 'node:path'
 
 /**
@@ -94,6 +94,17 @@ function recentTranscripts(projectsDir: string, since: number): Map<string, { pa
 
 function readJson(path: string): any {
   try { return JSON.parse(readFileSync(path, 'utf8')) } catch { return null }
+}
+
+/** The notifier's file name for a session. */
+const safeId = (value: string) => value.replace(/[^A-Za-z0-9._-]/g, '').slice(0, 64) || 'unknown'
+
+/** Gone to: a waiting session stops calling for attention, as after a click on its notification. */
+export function markSeen(dir: string, session: string, now = Date.now()): void {
+  const path = join(dir, `${safeId(session)}.json`)
+  const entry = readJson(path)
+  if (!entry || entry.state !== 'waiting') return
+  try { writeFileSync(path, JSON.stringify({ ...entry, state: 'running', message: '', at: now })) } catch {}
 }
 
 /**
