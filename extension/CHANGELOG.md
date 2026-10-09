@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.4
+
+- After VS Code restarts, the session list no longer shows every reopened session as
+  running. Claude Code writes its bookkeeping (cost totals, mode, last prompt) into each
+  transcript it reopens or closes, and the file's change alone was taken as work. A session
+  now counts as running by the time of its last dated record: a turn in progress, or one
+  resumed after the restart.
+
 ## 0.2.3
 
 - Not connected to Claude Code yet? Every start says so, with *Connect* and a way back to

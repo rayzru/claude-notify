@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { existsSync, mkdtempSync, mkdirSync, readFileSync, utimesSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdtempSync, mkdirSync, readFileSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import * as s from './.build/sessions.mjs'
@@ -83,8 +83,14 @@ test('the owning window is the one whose folder holds the session, deepest match
 /* -------------------------------------------- liveness from the transcript */
 
 const secs = (ms) => ms / 1000
+const iso = (at) => new Date(at).toISOString()
 function transcript(path, ageMs, cwd = '/work/app') {
-  writeFileSync(path, JSON.stringify({ type: 'user', cwd }) + '\n' + JSON.stringify({ type: 'ai-title', aiTitle: 'T' }) + '\n')
+  writeFileSync(path, JSON.stringify({ type: 'user', cwd, timestamp: iso(NOW - ageMs) }) + '\n' + JSON.stringify({ type: 'ai-title', aiTitle: 'T' }) + '\n')
+  utimesSync(path, secs(NOW - ageMs), secs(NOW - ageMs))
+}
+/** What reopening or closing the editor does to every restored session: undated lines, a fresh file time. */
+function reopened(path, ageMs = 1000) {
+  appendFileSync(path, ['last-prompt', 'cost-state', 'mode'].map((type) => JSON.stringify({ type, sessionId: 'x' })).join('\n') + '\n')
   utimesSync(path, secs(NOW - ageMs), secs(NOW - ageMs))
 }
 
@@ -152,14 +158,46 @@ test('a session the registry knows is not listed twice when its transcript is fr
   assert.equal(got.length, 1); assert.equal(got[0].state, 'waiting')
 })
 
+test('reopening the editor touches every restored transcript, and none of them is running', () => {
+  const d = dir(); const projects = join(d, 'projects'); const registry = join(d, 'registry')
+  const ids = ['aaaaaaaa', 'bbbbbbbb', 'cccccccc'].map((p) => `${p}-bbbb-4ccc-8ddd-eeeeeeeeeeee`)
+  mkdirSync(join(projects, '-work-app'), { recursive: true }); mkdirSync(registry)
+  const [done, cut, unknown] = ids.map((id) => join(projects, '-work-app', `${id}.jsonl`))
+  transcript(done, 60 * 60_000); reopened(done)
+  put(registry, ids[0], { state: 'done', at: NOW - 60 * 60_000, transcript: done })
+  transcript(cut, 30 * 60_000); reopened(cut) // quit mid-turn, not resumed
+  put(registry, ids[1], { state: 'running', at: NOW - 30 * 60_000, transcript: cut })
+  transcript(unknown, 2 * 24 * 3600_000); reopened(unknown)
+  assert.deepEqual(s.readSessions(registry, projects, NOW), [])
+})
+
+test('a resumed turn after a restart is running again', () => {
+  const d = dir(); const t = join(d, 't.jsonl')
+  transcript(t, 30 * 60_000); reopened(t, 5000)
+  appendFileSync(t, JSON.stringify({ type: 'assistant', timestamp: iso(NOW - 2000) }) + '\n')
+  utimesSync(t, secs(NOW - 2000), secs(NOW - 2000))
+  put(d, 'x', { state: 'running', at: NOW - 30 * 60_000, transcript: t })
+  assert.deepEqual(s.readSessions(d, '', NOW).map((x) => x.session), ['x'])
+  assert.equal(s.workedAt(t), NOW - 2000)
+})
+
+test('a record longer than the tail that is read is still taken as work', () => {
+  const d = dir(); const t = join(d, 't.jsonl')
+  transcript(t, 60 * 60_000)
+  appendFileSync(t, JSON.stringify({ type: 'user', pad: 'x'.repeat(400 * 1024), timestamp: iso(NOW - 3000) }) + '\n')
+  utimesSync(t, secs(NOW - 3000), secs(NOW - 3000))
+  assert.equal(s.workedAt(t), NOW - 3000)
+  assert.equal(s.workedAt(t, NOW - 1000), NOW - 3000) // not read: older than asked about
+})
+
 test('the starting folder comes from the head of the transcript, the current one from its tail', () => {
   const d = dir(); const projects = join(d, 'projects')
   const A = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee'
   mkdirSync(join(projects, '-work-planner'), { recursive: true })
   const t = join(projects, '-work-planner', `${A}.jsonl`)
   writeFileSync(t, [
-    JSON.stringify({ type: 'user', cwd: '/work/planner' }),
-    JSON.stringify({ type: 'user', cwd: '/work/iss' }),
+    JSON.stringify({ type: 'user', cwd: '/work/planner', timestamp: iso(NOW - 9000) }),
+    JSON.stringify({ type: 'user', cwd: '/work/iss', timestamp: iso(NOW - 5000) }),
   ].join('\n') + '\n')
   utimesSync(t, secs(NOW - 5000), secs(NOW - 5000))
   assert.equal(s.readRoot(t), '/work/planner')
