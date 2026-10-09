@@ -220,24 +220,38 @@ type ControlPick = vscode.QuickPickItem & { action?: 'pause' | 'resume' | 'quiet
 const section = (label: string): vscode.QuickPickItem => ({ label, kind: vscode.QuickPickItemKind.Separator })
 
 /**
- * Every active session: who, where, in what state, how full its context is. Each row has
- * the same shape — its icon in the icon column, the name with where it lives beside it,
- * then a second line that starts with the state — so the eye can run down the list.
+ * VS Code puts an item's icon in its first line only — 16px and 6px after it — and starts
+ * the second line at the edge. A blank icon and an en space start it under the name instead.
+ */
+const UNDER_NAME = '$(blank)\u2002'
+
+/**
+ * Every active session: who, where, in what state, how full its context is. Every row,
+ * the controls below too, has the same two lines — the name beside its icon, then in muted
+ * text under the name the state first and the rest after it — so the eye can run down the
+ * list. A spinning codicon would turn together with the space after it, off its centre, so
+ * a running session gets a spinner of its own.
  */
 async function showSessions(context: vscode.ExtensionContext): Promise<void> {
   const all = activeSessions()
+  const icon = (name: string) => ({
+    light: vscode.Uri.joinPath(context.extensionUri, 'media', 'icons', `${name}-light.svg`),
+    dark: vscode.Uri.joinPath(context.extensionUri, 'media', 'icons', `${name}-dark.svg`),
+  })
   const sessions: SessionPick[] = all.map((s) => {
     const d = readDetails(s.transcript)
     const waiting = s.state === 'waiting'
-    const facts = [stateLabel(s), d.model && modelName(d.model), d.contextTokens ? `context ${tokens(d.contextTokens)}` : '']
-      .filter(Boolean).join(' · ')
-    // What it is asking, or else how its last answer began — enough to recognise it.
-    const said = waiting && s.message ? s.message : d.reply
+    // What it is asking comes right after the state: a long line loses its end.
+    const facts = [
+      stateLabel(s), waiting && s.message, placeLabel(s), whereLabel(s),
+      d.model && modelName(d.model), d.contextTokens ? `context ${tokens(d.contextTokens)}` : '',
+    ].filter(Boolean).join(' · ')
+    // How its last answer began — enough to recognise it, where there is room.
+    const said = waiting && s.message ? '' : d.reply
     return {
       label: d.title || s.project,
-      iconPath: new vscode.ThemeIcon(waiting ? 'bell-dot' : 'sync~spin'),
-      description: `${placeLabel(s)} · ${whereLabel(s)}`,
-      detail: said ? `${facts} — ${said}` : facts,
+      iconPath: waiting ? new vscode.ThemeIcon('bell-dot') : icon('running'),
+      detail: UNDER_NAME + (said ? `${facts} — ${said}` : facts),
       id: s.session,
       root: s.root || s.cwd,
       title: d.title || s.project,
@@ -246,10 +260,10 @@ async function showSessions(context: vscode.ExtensionContext): Promise<void> {
   // Last, not first: the first item is what Enter picks.
   const paused = pauseNote()
   const control: ControlPick = paused
-    ? { label: 'Resume notifications', iconPath: new vscode.ThemeIcon('bell'), description: paused, action: 'resume' }
-    : { label: 'Pause notifications…', iconPath: new vscode.ThemeIcon('bell-slash'), action: 'pause' }
-  const quiet: ControlPick = { label: 'Announce turns longer than…', iconPath: new vscode.ThemeIcon('watch'), description: quietLabel(quietSeconds()), action: 'quiet' }
-  const setup: ControlPick = { label: 'Set up…', iconPath: new vscode.ThemeIcon('gear'), description: 'connect, allow notifications, try it', action: 'setup' }
+    ? { label: 'Resume notifications', iconPath: new vscode.ThemeIcon('bell'), detail: UNDER_NAME + paused, action: 'resume' }
+    : { label: 'Pause notifications…', iconPath: new vscode.ThemeIcon('bell-slash'), detail: `${UNDER_NAME}All of them or only the ones inside VS Code, for a while`, action: 'pause' }
+  const quiet: ControlPick = { label: 'Announce turns longer than…', iconPath: new vscode.ThemeIcon('watch'), detail: `${UNDER_NAME}Now ${quietLabel(quietSeconds())}`, action: 'quiet' }
+  const setup: ControlPick = { label: 'Set up…', iconPath: new vscode.ThemeIcon('gear'), detail: `${UNDER_NAME}Connect, allow notifications, try it`, action: 'setup' }
   const items: (SessionPick | ControlPick)[] = [
     ...(sessions.length ? [section('sessions'), ...sessions] : []),
     section('notifications'), control, quiet, setup,

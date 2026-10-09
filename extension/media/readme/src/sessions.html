@@ -5,40 +5,45 @@ body { width: 700px; padding: 0 0 18px; background: #1f1f1f; }
 .qp { width: 640px; margin: 8px auto 0; background: #222222; border: 1px solid #2b2b2b; border-radius: 6px; box-shadow: 0 0 12px rgba(0,0,0,.6); padding: 6px 0 6px; }
 .title { text-align: center; color: #cccccc; padding: 2px 0 6px; font-size: 13px; }
 .input { margin: 0 6px 6px; height: 26px; border: 1px solid #0078d4; border-radius: 3px; background: #313131; color: #989898; display: flex; align-items: center; padding: 0 8px; }
-/* an item: the icon in a column of its own, then the label row and the detail row under it */
-.item { margin: 0 6px; padding: 4px 8px; border-radius: 3px; display: grid; grid-template-columns: 16px 1fr auto; column-gap: 8px; align-items: center; }
-.item.two { align-items: start; }
-.item.two .codicon { margin-top: 2px; }
+/* VS Code's own structure: the icon sits in the first row only (16px, 6px after it); the
+   second row starts at the edge, so the extension starts it with a blank icon and an en space */
+.item { margin: 0 6px; padding: 0 8px; border-radius: 3px; height: 44px; display: flex; align-items: center; }
 .item.sel { background: #04395e; outline: 1px solid #2488db; outline-offset: -1px; }
-.item.border { border-top: 1px solid #3c3c3c; border-radius: 0; margin-top: 2px; padding-top: 6px; }
-.text { min-width: 0; }
-.l { display: flex; gap: 6px; align-items: baseline; white-space: nowrap; overflow: hidden; }
-.d { color: #9d9d9d; font-size: 12px; overflow: hidden; text-overflow: ellipsis; }
-.det { color: #9d9d9d; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; margin-top: 1px; }
-.sep { color: #9d9d9d; font-size: 11px; white-space: nowrap; }
+.item.border { border-top: 1px solid #3c3c3c; border-radius: 0; }
+.rows { flex: 1; min-width: 0; margin-left: 5px; }
+.row { height: 22px; display: flex; align-items: center; white-space: pre; overflow: hidden; }
+.icon { width: 16px; height: 22px; padding-right: 6px; display: flex; align-items: center; justify-content: center; flex: none; }
+.icon .codicon { vertical-align: 0; }
+.spin { background: url(../../icons/running-dark.svg) no-repeat left center / 16px; justify-content: flex-start; }
+.meta { opacity: .7; text-overflow: ellipsis; overflow: hidden; }
+.meta .codicon { vertical-align: text-bottom; }
+.sep { color: #9d9d9d; font-size: 11px; white-space: nowrap; align-self: flex-start; margin-top: 4px; }
 </style>
 <div class="top">api — Visual Studio Code</div>
 <div class="qp"><div class="title">✻ Claude Code sessions</div>
   <div class="input">Every window — pick one to go there</div>
-  <div class="item two sel"><i class="codicon codicon-bell-dot"></i>
-    <div class="text"><div class="l"><span>Release notes for 0.2.0</span><span class="d">claude-notify · window: claude-notify</span></div>
-      <div class="det">Waiting for you · 2 min · Opus 5.5 · context 61K — Claude needs your permission to use Bash</div></div>
-    <span class="sep">sessions</span></div>
-  <div class="item two"><i class="codicon codicon-sync"></i>
-    <div class="text"><div class="l"><span>Fix the flaky test</span><span class="d">api · this window</span></div>
-      <div class="det">Running · 6 min · Sonnet 5.5 · context 38K — Found the race in the retry loop; adding a test for it.</div></div>
-    <span></span></div>
-  <div class="item two"><i class="codicon codicon-sync"></i>
-    <div class="text"><div class="l"><span>Migrate settings page</span><span class="d">web → web-legacy · window: web</span></div>
-      <div class="det">Running · 24 min · Opus 5.5 · context 112K — Moved the form to the new components and kept the old routes.</div></div>
-    <span></span></div>
-  <div class="item border"><i class="codicon codicon-bell-slash"></i>
-    <div class="text"><div class="l"><span>Pause notifications…</span></div></div>
-    <span class="sep">notifications</span></div>
-  <div class="item"><i class="codicon codicon-watch"></i>
-    <div class="text"><div class="l"><span>Announce turns longer than…</span><span class="d">45 seconds</span></div></div>
-    <span></span></div>
-  <div class="item"><i class="codicon codicon-gear"></i>
-    <div class="text"><div class="l"><span>Set up…</span><span class="d">connect, allow notifications, try it</span></div></div>
-    <span></span></div>
+  <div class="item sel"><div class="rows">
+    <div class="row"><span class="icon"><i class="codicon codicon-bell-dot"></i></span>Release notes for 0.2.0</div>
+    <div class="row meta"><i class="codicon codicon-blank"></i>&#8194;Waiting for you · 2 min · Claude needs your permission to use Bash · claude-notify · window: claude-notify · Opus 5.5 · context 61K</div>
+  </div><span class="sep">sessions</span></div>
+  <div class="item"><div class="rows">
+    <div class="row"><span class="icon spin"></span>Fix the flaky test</div>
+    <div class="row meta"><i class="codicon codicon-blank"></i>&#8194;Running · 6 min · api · this window · Sonnet 5.5 · context 38K — Found the race in the retry loop; adding a test for it.</div>
+  </div></div>
+  <div class="item"><div class="rows">
+    <div class="row"><span class="icon spin"></span>Migrate settings page</div>
+    <div class="row meta"><i class="codicon codicon-blank"></i>&#8194;Running · 24 min · web → web-legacy · window: web · Opus 5.5 · context 112K — Moved the form to the new components.</div>
+  </div></div>
+  <div class="item border"><div class="rows">
+    <div class="row"><span class="icon"><i class="codicon codicon-bell-slash"></i></span>Pause notifications…</div>
+    <div class="row meta"><i class="codicon codicon-blank"></i>&#8194;All of them or only the ones inside VS Code, for a while</div>
+  </div><span class="sep">notifications</span></div>
+  <div class="item"><div class="rows">
+    <div class="row"><span class="icon"><i class="codicon codicon-watch"></i></span>Announce turns longer than…</div>
+    <div class="row meta"><i class="codicon codicon-blank"></i>&#8194;Now 45 seconds</div>
+  </div></div>
+  <div class="item"><div class="rows">
+    <div class="row"><span class="icon"><i class="codicon codicon-gear"></i></span>Set up…</div>
+    <div class="row meta"><i class="codicon codicon-blank"></i>&#8194;Connect, allow notifications, try it</div>
+  </div></div>
 </div>
