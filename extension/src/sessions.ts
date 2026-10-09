@@ -94,7 +94,31 @@ function mtime(path: string): number {
   try { return statSync(path).mtimeMs } catch { return 0 }
 }
 
-/** Top-level transcripts written since `since`. Subagents keep theirs in subfolders, skipped. */
+/**
+ * When the session last did something. Every record of a turn is dated, but Claude Code
+ * also appends undated bookkeeping — cost totals, the mode, the last prompt — to each
+ * transcript it reopens or closes, so an editor restart touches all of them at once. The
+ * file's time only says whether to look; the last dated record says when it worked.
+ * A file untouched since `since` is not read: its last record can only be older still.
+ */
+export function workedAt(transcript: string, since = 0): number {
+  const written = mtime(transcript)
+  if (written < since) return written
+  const tail = readTail(transcript, 256 * 1024)
+  const lines = tail.text.split('\n')
+  if (tail.cut) lines.shift()
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (!lines[i].includes('"timestamp"')) continue
+    let d: any
+    try { d = JSON.parse(lines[i]) } catch { continue }
+    const at = typeof d.timestamp === 'string' ? Date.parse(d.timestamp) : NaN
+    if (at) return at
+  }
+  // a single record longer than the tail is a turn's output, not bookkeeping
+  return tail.cut ? written : 0
+}
+
+/** Top-level transcripts worked in since `since`. Subagents keep theirs in subfolders, skipped. */
 function recentTranscripts(projectsDir: string, since: number): Map<string, { path: string; at: number }> {
   const found = new Map<string, { path: string; at: number }>()
   let projects: string[] = []
@@ -107,7 +131,7 @@ function recentTranscripts(projectsDir: string, since: number): Map<string, { pa
       const id = file.slice(0, -'.jsonl'.length)
       if (!UUID.test(id)) continue
       const path = join(projectsDir, project, file)
-      const at = mtime(path)
+      const at = workedAt(path, since)
       if (at >= since) found.set(id, { path, at })
     }
   }
@@ -133,7 +157,7 @@ export function markSeen(dir: string, session: string, now = Date.now()): void {
  * Active sessions. A prompt, a wait and a finish come from hooks, but hooks alone miss
  * too much: a session that resumes its interrupted turn after an editor restart sends no
  * prompt, and one killed mid-turn never sends a finish. What a working session always
- * does is write its transcript, so that decides "running"; the hooks decide "waiting"
+ * does is add dated records to its transcript, so that decides "running"; the hooks decide "waiting"
  * and mark where a turn ended.
  */
 export function readSessions(dir: string, projectsDir = '', now = Date.now()): Session[] {
@@ -156,7 +180,7 @@ export function readSessions(dir: string, projectsDir = '', now = Date.now()): S
   const seen = new Set<string>()
   for (const s of registry.values()) {
     seen.add(s.session)
-    const written = s.transcript ? mtime(s.transcript) : 0
+    const written = s.transcript ? workedAt(s.transcript, now - STALLED_MS) : 0
     if (s.state === 'waiting') {
       out.push(s)
     } else if (s.state === 'running') {
