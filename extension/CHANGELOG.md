@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.6
+
+- The spinner of a running session turns about its own centre. A spinning codicon in the
+  session list turned together with the space after it, off-centre and into the name.
+- Every row of the session list, the controls below too, has two lines: the name beside
+  its icon, and under the name, in muted text, the state first and the rest after it. What
+  a waiting session asks comes right after the state, where a long line does not cut it off.
+
 ## 0.2.5
 
 - A session whose turn has ended but whose background agents or workflow are still at work
