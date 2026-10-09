@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict'
+import { execFileSync } from 'node:child_process'
 import { appendFileSync, existsSync, mkdtempSync, mkdirSync, readFileSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -51,6 +52,16 @@ test('title, model and context come from the latest lines of the transcript', ()
   assert.equal(got.title, 'Плагин VSCode сигнализирование о статусе')
   assert.equal(got.model, 'claude-opus-5')
   assert.equal(got.contextTokens, 396290)
+})
+
+test('a name the user gave the tab wins over a title Claude chooses later, as on the tab', () => {
+  const d = dir(); const t = join(d, 't.jsonl')
+  writeFileSync(t, [
+    JSON.stringify({ type: 'ai-title', aiTitle: 'Claude\'s first idea' }),
+    JSON.stringify({ type: 'custom-title', customTitle: 'Release 0.3', sessionId: 'x' }),
+    JSON.stringify({ type: 'ai-title', aiTitle: 'Bump the version' }),
+  ].join('\n') + '\n')
+  assert.equal(s.readDetails(t).title, 'Release 0.3')
 })
 
 test('a missing transcript gives empty details rather than an error', () => {
@@ -211,6 +222,98 @@ test('an entry written before the starting folder was recorded gets it from the 
   put(d, 'x', { state: 'waiting', at: NOW - 1000, transcript: t, cwd: '/work/iss' })
   const [got] = s.readSessions(d, '', NOW)
   assert.equal(got.root, '/work/planner'); assert.equal(got.project, 'planner')
+})
+
+/* ------------------------------------------- Claude Code's own account of its processes */
+
+const procDir = () => { const d = dir(); mkdirSync(join(d, 'procs')); return d }
+const proc = (d, pid, body) => writeFileSync(join(d, 'procs', `${pid}.json`), JSON.stringify({ pid, procStart: `start-${pid}`, ...body }))
+const DEAD = 4
+const runs = (pid, procStart) => pid !== DEAD && procStart === `start-${pid}`
+
+test('Claude Code says which session each running process holds and what it is doing', () => {
+  const d = procDir()
+  proc(d, 1, { sessionId: 'busy', status: 'busy', cwd: '/work/app', statusUpdatedAt: NOW - 60_000 })
+  proc(d, 2, { sessionId: 'asks', status: 'waiting', waitingFor: 'input needed', statusUpdatedAt: NOW - 5000 })
+  proc(d, 3, { sessionId: 'idle', status: 'idle', statusUpdatedAt: NOW - 5000 })
+  proc(d, DEAD, { sessionId: 'crashed', status: 'busy' }) // its process is gone
+  proc(d, 5, { sessionId: 'reused', status: 'busy', procStart: 'an earlier process' }) // the pid went to another
+  proc(d, 6, { sessionId: 'spare', status: 'idle', spare: true }) // started ahead of need
+  proc(d, 7, { sessionId: 'old', cwd: '/work/app' }) // a version that kept no status
+  writeFileSync(join(d, 'procs', '1.abcdef.key'), '{}')
+  const live = s.readLive(join(d, 'procs'), runs)
+  assert.deepEqual([...live.keys()].sort(), ['asks', 'busy', 'idle'])
+  assert.deepEqual(live.get('busy'), { session: 'busy', status: 'busy', waitingFor: '', cwd: '/work/app', since: NOW - 60_000 })
+  assert.equal(live.get('asks').waitingFor, 'input needed')
+  assert.equal(s.readLive(join(d, 'absent'), runs).size, 0)
+})
+
+test('two processes on one session: the one doing something speaks for it', () => {
+  const d = procDir()
+  proc(d, 1, { sessionId: 'x', status: 'idle', statusUpdatedAt: NOW })
+  proc(d, 2, { sessionId: 'x', status: 'busy', statusUpdatedAt: NOW - 60_000 })
+  assert.equal(s.readLive(join(d, 'procs'), runs).get('x').status, 'busy')
+})
+
+test('a process is the one that wrote its file only if it started when the file says', () => {
+  const started = execFileSync('ps', ['-o', 'lstart=', '-p', String(process.pid)], { env: { ...process.env, TZ: 'UTC', LC_ALL: 'C' }, encoding: 'utf8' }).trim()
+  assert.equal(s.runningProcess(process.pid, started), true)
+  assert.equal(s.runningProcess(process.pid, 'Mon Jan  1 00:00:00 2001'), false)
+  assert.equal(s.runningProcess(99_999_999, started), false)
+  assert.equal(s.runningProcess(0, ''), false)
+})
+
+const live = (entries) => new Map(entries.map((l) => [l.session, { waitingFor: '', cwd: '/work/app', since: NOW - 60_000, ...l }]))
+
+test('a finished turn whose background agents still work is running, since Claude Code went busy', () => {
+  const d = dir(); const t = join(d, 't.jsonl')
+  transcript(t, 20 * 60_000) // the main transcript is quiet; the agents write elsewhere
+  put(d, 'x', { state: 'done', at: NOW - 20 * 60_000, transcript: t })
+  const [got] = s.readSessions(d, '', NOW, live([{ session: 'x', status: 'busy', since: NOW - 25 * 60_000 }]))
+  assert.equal(got.state, 'running'); assert.equal(got.at, NOW - 25 * 60_000); assert.equal(got.transcript, t)
+})
+
+test('idle in Claude Code\'s word is not running, however fresh the hook or the transcript', () => {
+  const d = dir(); const projects = join(d, 'projects'); const registry = join(d, 'registry')
+  const A = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee'
+  mkdirSync(join(projects, '-work-app'), { recursive: true }); mkdirSync(registry)
+  const t = join(projects, '-work-app', `${A}.jsonl`)
+  transcript(t, 10_000)
+  put(registry, 'x', { state: 'running', at: NOW - 10_000, transcript: t })
+  assert.deepEqual(s.readSessions(registry, projects, NOW, live([{ session: 'x', status: 'idle' }, { session: A, status: 'idle' }])), [])
+})
+
+test('a permission prompt in a VS Code tab leaves the process busy; the hook\'s wait stands', () => {
+  const d = dir()
+  put(d, 'x', { state: 'waiting', at: NOW - 30_000, message: 'Claude needs your permission to use Bash' })
+  const [got] = s.readSessions(d, '', NOW, live([{ session: 'x', status: 'busy' }]))
+  assert.equal(got.state, 'waiting'); assert.equal(got.message, 'Claude needs your permission to use Bash'); assert.equal(got.at, NOW - 30_000)
+})
+
+test('busy again after the prompt means it was answered; idle, that it went away unanswered', () => {
+  const d = dir()
+  put(d, 'x', { state: 'waiting', at: NOW - 30_000, message: 'Claude needs your permission to use AskUserQuestion' })
+  const [got] = s.readSessions(d, '', NOW, live([{ session: 'x', status: 'busy', since: NOW - 10_000 }]))
+  assert.equal(got.state, 'running'); assert.equal(got.at, NOW - 10_000)
+  assert.deepEqual(s.readSessions(d, '', NOW, live([{ session: 'x', status: 'idle', since: NOW - 10_000 }])), [])
+})
+
+test('a session only Claude Code knows of is listed with its transcript, found by its folder', () => {
+  const d = dir(); const projects = join(d, 'projects')
+  const A = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee'
+  const B = 'bbbbbbbb-bbbb-4ccc-8ddd-eeeeeeeeeeee'
+  mkdirSync(join(projects, '-work-planner'), { recursive: true }); mkdirSync(join(projects, '-elsewhere'))
+  writeFileSync(join(projects, '-work-planner', `${A}.jsonl`), JSON.stringify({ type: 'user', cwd: '/work/planner' }) + '\n')
+  writeFileSync(join(projects, '-elsewhere', `${B}.jsonl`), JSON.stringify({ type: 'user', cwd: '/work/started-here' }) + '\n')
+  const got = s.readSessions(join(d, 'registry'), projects, NOW, live([
+    { session: A, status: 'busy', cwd: '/work/planner' },
+    { session: B, status: 'waiting', waitingFor: 'input needed', cwd: '/work/moved' },
+  ]))
+  assert.deepEqual(got.map((x) => [x.session, x.state, x.root, x.message]), [
+    [B, 'waiting', '/work/started-here', 'input needed'],
+    [A, 'running', '/work/planner', ''],
+  ])
+  assert.equal(got[1].transcript, join(projects, '-work-planner', `${A}.jsonl`))
 })
 
 test('the list shows how the last answer began', () => {

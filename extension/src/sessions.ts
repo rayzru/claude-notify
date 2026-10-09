@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process'
 import { closeSync, existsSync, fstatSync, openSync, readdirSync, readFileSync, readSync, statSync, unlinkSync, writeFileSync } from 'node:fs'
 import { basename, join } from 'node:path'
 
@@ -153,14 +154,117 @@ export function markSeen(dir: string, session: string, now = Date.now()): void {
   try { writeFileSync(path, JSON.stringify({ ...entry, state: 'running', message: '', at: now })) } catch {}
 }
 
+/** What Claude Code itself says of a session one of its processes holds. */
+export interface Live {
+  session: string
+  status: 'busy' | 'waiting' | 'idle'
+  waitingFor: string
+  cwd: string
+  /** when the status last changed */
+  since: number
+}
+
+const RANK = { idle: 0, busy: 1, waiting: 2 }
+/** How long a process found to be the one that wrote its file is taken at its word. */
+const VERIFIED_MS = 10 * 60_000
+const verified = new Map<string, number>()
+
 /**
- * Active sessions. A prompt, a wait and a finish come from hooks, but hooks alone miss
- * too much: a session that resumes its interrupted turn after an editor restart sends no
- * prompt, and one killed mid-turn never sends a finish. What a working session always
- * does is add dated records to its transcript, so that decides "running"; the hooks decide "waiting"
- * and mark where a turn ended.
+ * Whether the process that wrote a file is still running. Its pid alone is not enough: a
+ * file left by a crash can name a pid the system has since given to something else, so
+ * the start time Claude Code wrote down must match too — read as Claude Code reads it.
  */
-export function readSessions(dir: string, projectsDir = '', now = Date.now()): Session[] {
+export function runningProcess(pid: number, procStart: string, now = Date.now()): boolean {
+  if (!Number.isInteger(pid) || pid <= 0) return false
+  try { process.kill(pid, 0) } catch (err: any) { if (err?.code !== 'EPERM') return false }
+  if (!procStart || process.platform === 'win32') return true
+  const key = `${pid} ${procStart}`
+  if ((verified.get(key) ?? 0) > now - VERIFIED_MS) return true
+  let started = ''
+  try {
+    started = execFileSync('ps', ['-o', 'lstart=', '-p', String(pid)], {
+      env: { ...process.env, TZ: 'UTC', LC_ALL: 'C' }, encoding: 'utf8', timeout: 2000, stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim()
+  } catch {
+    return false
+  }
+  const same = started.replace(/\s+/g, ' ') === procStart.trim().replace(/\s+/g, ' ')
+  if (same) verified.set(key, now)
+  return same
+}
+
+/**
+ * Claude Code keeps a file per running process in ~/.claude/sessions, naming the session
+ * it holds and whether it is busy, waiting for the user or idle. Busy covers what no hook
+ * reports: background agents and workflows still at work after the turn that started
+ * them has ended. A file whose process is gone is left over from a crash and says nothing.
+ */
+export function readLive(dir: string, running = runningProcess): Map<string, Live> {
+  const live = new Map<string, Live>()
+  let names: string[] = []
+  try { names = readdirSync(dir) } catch { return live }
+  for (const name of names) {
+    if (!/^\d+\.json$/.test(name)) continue
+    const s = readJson(join(dir, name))
+    // a spare is started ahead of need and holds no one's session yet
+    if (!s || typeof s.sessionId !== 'string' || !s.sessionId || s.spare === true) continue
+    if (s.status !== 'busy' && s.status !== 'waiting' && s.status !== 'idle') continue
+    if (!running(Number(s.pid), typeof s.procStart === 'string' ? s.procStart : '')) continue
+    const entry: Live = {
+      session: s.sessionId,
+      status: s.status,
+      waitingFor: typeof s.waitingFor === 'string' ? s.waitingFor : '',
+      cwd: typeof s.cwd === 'string' ? s.cwd : '',
+      since: Number(s.statusUpdatedAt || s.updatedAt || s.startedAt) || 0,
+    }
+    // two processes on one session: the one doing something speaks for it
+    const had = live.get(entry.session)
+    if (!had || RANK[entry.status] > RANK[had.status] || (RANK[entry.status] === RANK[had.status] && entry.since > had.since)) {
+      live.set(entry.session, entry)
+    }
+  }
+  return live
+}
+
+/**
+ * A live session as the list shows it, or null when it is idle. Claude Code's word
+ * decides, with one thing only a hook knows: a permission prompt in a VS Code tab leaves
+ * the process busy. So the hook's wait stands until the status changes after it — busy
+ * again once answered, idle once it went away unanswered.
+ */
+function liveState(l: Live, s: any): { state: SessionState; message: string; at: number } | null {
+  const hookWaits = s?.state === 'waiting'
+  if (l.status === 'waiting') return { state: 'waiting', message: (hookWaits && s.message) || l.waitingFor, at: hookWaits ? s.at : l.since }
+  if (hookWaits && s.at >= l.since) return { state: 'waiting', message: s.message || '', at: s.at }
+  if (l.status === 'busy') return { state: 'running', message: '', at: l.since }
+  return null
+}
+
+/** Claude Code names a project's folder after its path, every other character a dash. */
+function findTranscript(projectsDir: string, id: string, cwd: string): string {
+  if (!projectsDir) return ''
+  const file = `${id}.jsonl`
+  const guess = join(projectsDir, cwd.replace(/[^A-Za-z0-9]/g, '-'), file)
+  if (existsSync(guess)) return guess
+  let projects: string[] = []
+  try { projects = readdirSync(projectsDir) } catch { return '' }
+  for (const project of projects) {
+    const path = join(projectsDir, project, file)
+    if (existsSync(path)) return path
+  }
+  return ''
+}
+
+/**
+ * Active sessions. Claude Code's own account of its running processes decides first. For
+ * a session it does not account for — a version before it kept one, a process already
+ * gone — the hooks and the transcript decide. A prompt, a wait and a finish come from
+ * hooks, but hooks alone miss too much: a session that resumes its interrupted turn after
+ * an editor restart sends no prompt, and one killed mid-turn never sends a finish. What a
+ * working session always does is add dated records to its transcript, so that decides
+ * "running"; the hooks decide "waiting" and mark where a turn ended.
+ */
+export function readSessions(dir: string, projectsDir = '', now = Date.now(), live: Map<string, Live> = new Map()): Session[] {
   const registry = new Map<string, any>()
   let names: string[] = []
   try { names = readdirSync(dir) } catch {}
@@ -180,6 +284,12 @@ export function readSessions(dir: string, projectsDir = '', now = Date.now()): S
   const seen = new Set<string>()
   for (const s of registry.values()) {
     seen.add(s.session)
+    const l = live.get(s.session)
+    if (l) {
+      const shown = liveState(l, s)
+      if (shown) out.push({ ...s, ...shown })
+      continue
+    }
     const written = s.transcript ? workedAt(s.transcript, now - STALLED_MS) : 0
     if (s.state === 'waiting') {
       out.push(s)
@@ -191,6 +301,16 @@ export function readSessions(dir: string, projectsDir = '', now = Date.now()): S
       // written again well after the turn ended: working again without a prompt
       if (written > s.at + AFTER_STOP_MS && written > now - ACTIVE_MS) out.push({ ...s, state: 'running', at: written })
     }
+  }
+
+  for (const l of live.values()) {
+    if (seen.has(l.session)) continue
+    seen.add(l.session)
+    const shown = liveState(l, null)
+    if (!shown) continue
+    const transcript = findTranscript(projectsDir, l.session, l.cwd)
+    const root = readRoot(transcript) || l.cwd
+    out.push({ session: l.session, cwd: l.cwd, root, project: projectOf(root), transcript, ...shown })
   }
 
   if (projectsDir) {
@@ -239,7 +359,8 @@ function readTail(path: string, bytes: number): { text: string; cut: boolean } {
 /**
  * Claude Code appends the session's title and each reply's token usage to the
  * transcript, so the freshest of both sit in its last lines — reading the tail is enough,
- * even when the whole file runs to megabytes.
+ * even when the whole file runs to megabytes. A name the user gave the session's tab
+ * wins over the one Claude chose, as it does on the tab.
  */
 export function readDetails(transcript: string): Details {
   const details: Details = { title: '', model: '', contextTokens: 0, cwd: '', reply: '' }
@@ -247,12 +368,14 @@ export function readDetails(transcript: string): Details {
   const tail = readTail(transcript, 512 * 1024)
   const lines = tail.text.split('\n')
   if (tail.cut) lines.shift() // starts mid-line; a short transcript is read whole and keeps it
+  let named = ''
   for (const line of lines) {
-    if (!line.includes('"ai-title"') && !line.includes('"usage"') && !line.includes('"cwd"') && !line.includes('"text"')) continue
+    if (!line.includes('-title"') && !line.includes('"usage"') && !line.includes('"cwd"') && !line.includes('"text"')) continue
     let d: any
     try { d = JSON.parse(line) } catch { continue }
     if (typeof d.cwd === 'string' && d.cwd) details.cwd = d.cwd
     if (d.type === 'ai-title' && d.aiTitle) details.title = String(d.aiTitle)
+    if (d.type === 'custom-title' && d.customTitle) named = String(d.customTitle)
     if (d.type === 'assistant') {
       const text = (d.message?.content || [])
         .filter((part: any) => part && part.type === 'text' && part.text)
@@ -267,6 +390,7 @@ export function readDetails(transcript: string): Details {
       details.model = String(d.message.model || '')
     }
   }
+  if (named) details.title = named
   return details
 }
 

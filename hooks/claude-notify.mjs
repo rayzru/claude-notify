@@ -689,7 +689,8 @@ function readRoot(transcriptPath) {
 
 /**
  * The session's title — the one Claude Code shows in its tab — is appended to the
- * transcript on every turn, so the latest sits near the end.
+ * transcript on every turn, so the latest sits near the end. A name the user gave the
+ * tab wins over the one Claude chose, as it does on the tab.
  */
 function readTitle(transcriptPath) {
   if (!transcriptPath) return ''
@@ -700,11 +701,11 @@ function readTitle(transcriptPath) {
     const length = Math.min(size, 128 * 1024)
     const buf = Buffer.alloc(length)
     readSync(fd, buf, 0, length, size - length)
-    let title = ''
-    for (const match of buf.toString('utf8').matchAll(/"aiTitle"\s*:\s*"((?:[^"\\]|\\.)*)"/g)) {
-      try { title = JSON.parse(`"${match[1]}"`) } catch {}
+    const titles = { aiTitle: '', customTitle: '' }
+    for (const match of buf.toString('utf8').matchAll(/"(aiTitle|customTitle)"\s*:\s*"((?:[^"\\]|\\.)*)"/g)) {
+      try { titles[match[1]] = JSON.parse(`"${match[2]}"`) } catch {}
     }
-    return title
+    return titles.customTitle || titles.aiTitle
   } catch {
     return ''
   } finally {

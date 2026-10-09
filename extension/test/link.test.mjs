@@ -151,6 +151,16 @@ ok('the notification is titled with the session, the project goes underneath')
 assert.equal(done.message, 'Done — Fixed the flaky test in sessions.test and pushed the branch. Next: review and release.')
 ok('and carries how the last answer began, markdown and code stripped')
 
+const t3 = join(home2, 't3.jsonl')
+writeFileSync(t3, [
+  JSON.stringify({ type: 'user', cwd: '/work/planner' }),
+  JSON.stringify({ type: 'custom-title', customTitle: 'Release 0.3', sessionId: 'x' }),
+  JSON.stringify({ type: 'ai-title', aiTitle: 'Bump the version' }), // Claude retitles it later; the tab keeps the user's name
+].join('\n') + '\n')
+const renamed = JSON.parse(await show({ hook_event_name: 'Stop', session_id: 'eeeeeeee-eeee-4fff-8000-111111111111', cwd: '/work/planner', transcript_path: t3 }))
+assert.equal(renamed.title, 'Release 0.3')
+ok('a tab the user renamed gives the notification its name')
+
 /** What the presenter would do with a notification, without doing it. */
 const dryShow = (o, env) => new Promise((resolve) => {
   const p = spawn(process.execPath, [SCRIPT, '--show', JSON.stringify(o)], { env: { ...process.env, CLAUDE_NOTIFY_DRYRUN: '1', ...env }, stdio: ['ignore', 'pipe', 'ignore'] })
