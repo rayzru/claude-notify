@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.2.5
+
+- A session whose turn has ended but whose background agents or workflow are still at work
+  counts as running. Claude Code now runs subagents in the background by default, so the
+  turn's end no longer means the work is done, and the status bar showed one session where
+  several were busy. Running, waiting and idle now come from Claude Code's own record of its
+  processes; the transcript decides only for sessions it keeps no record of.
+- A question answered in a VS Code tab no longer leaves its session marked as waiting.
+- A tab you renamed keeps its name in the session list and in notifications, as on the tab,
+  and its notifications are still held back while that tab is in front of you.
+- The session list reads in one rhythm: every icon in its own column, the name with where
+  the session lives beside it, a second line that starts with the state and how long, and
+  sections for sessions and for notifications.
+
 ## 0.2.4
 
 - After VS Code restarts, the session list no longer shows every reopened session as

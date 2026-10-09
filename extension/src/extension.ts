@@ -10,7 +10,7 @@ import {
   linksDir, pausedUntil, pausePath, pluginInstalled, runnerPath, sessionsDir, setPause, stableScriptPath,
   unwireHooks, wireHooks, writeConfig, writeRunner, type PauseScope,
 } from './wiring'
-import { ago, lastPrompted, markSeen, modelName, ownerOf, readDetails, readSessions, tokens, windowName, type Session } from './sessions'
+import { ago, lastPrompted, markSeen, modelName, ownerOf, readDetails, readLive, readSessions, tokens, windowName, type Session } from './sessions'
 import { tabShowsTitle, toastFor } from './toast'
 
 /**
@@ -32,6 +32,8 @@ const LINK_FILE = linkPath(HOME, process.pid)
 const SESSIONS = sessionsDir(HOME)
 // Claude Code's own transcripts: a working session keeps writing to its file.
 const PROJECTS = join(HOME, '.claude', 'projects')
+// Claude Code's own account of its running processes: busy, waiting or idle.
+const LIVE = join(HOME, '.claude', 'sessions')
 const SETUP_SHOWN_KEY = 'claudeNotify.setupShown'
 /** When a window last said the hooks are missing: every window starts at once, one says it. */
 const REMINDED_KEY = 'claudeNotify.connectRemindedAt'
@@ -84,13 +86,15 @@ function readBody(req: IncomingMessage): Promise<any> {
 
 /* ------------------------------------------------------------- status bar */
 
+const activeSessions = () => readSessions(SESSIONS, PROJECTS, Date.now(), readLive(LIVE))
+
 function refreshStatusBar(): void {
   if (!statusBar) return
   if (!vscode.workspace.getConfiguration('claudeNotify').get<boolean>('statusBar', true)) {
     statusBar.hide()
     return
   }
-  const all = readSessions(SESSIONS, PROJECTS)
+  const all = activeSessions()
   const waiting = all.filter((s) => s.state === 'waiting').length
   const running = all.length - waiting
   const paused = pauseNote()
@@ -166,10 +170,17 @@ function resumeNotifications(): void {
   vscode.window.setStatusBarMessage(was ? '$(bell) Notifications resumed' : '$(bell) Notifications were not paused', 5000)
 }
 
-/** "work-planner · now in ISS": started in one repository, working in another. */
-function movedTo(s: Session): string {
-  if (!s.cwd || !s.root || s.cwd === s.root || s.cwd.startsWith(s.root + '/')) return ''
-  return ` · now in ${basename(s.cwd)}`
+/** "work-planner → ISS": started in one repository, working in another. */
+function placeLabel(s: Session): string {
+  if (!s.cwd || !s.root || s.cwd === s.root || s.cwd.startsWith(s.root + '/')) return s.project
+  return `${s.project} → ${basename(s.cwd)}`
+}
+
+/** "Running · 25 min", "Waiting for you": the state, and for how long once it is a while. */
+function stateLabel(s: Session): string {
+  const since = ago(s.at)
+  const state = s.state === 'waiting' ? 'Waiting for you' : 'Running'
+  return since === 'just now' ? state : `${state} · ${since}`
 }
 
 /** The window a session lives in, as the list shows it. */
@@ -206,20 +217,27 @@ async function goToSession(context: vscode.ExtensionContext, session: string, ro
 type SessionPick = vscode.QuickPickItem & { id: string; root: string; title: string }
 type ControlPick = vscode.QuickPickItem & { action?: 'pause' | 'resume' | 'quiet' | 'setup' }
 
-/** Every active session: who, where, in what state, how full its context is. */
+const section = (label: string): vscode.QuickPickItem => ({ label, kind: vscode.QuickPickItemKind.Separator })
+
+/**
+ * Every active session: who, where, in what state, how full its context is. Each row has
+ * the same shape — its icon in the icon column, the name with where it lives beside it,
+ * then a second line that starts with the state — so the eye can run down the list.
+ */
 async function showSessions(context: vscode.ExtensionContext): Promise<void> {
-  const all = readSessions(SESSIONS, PROJECTS)
+  const all = activeSessions()
   const sessions: SessionPick[] = all.map((s) => {
     const d = readDetails(s.transcript)
-    const facts = [
-      d.model && modelName(d.model),
-      d.contextTokens ? `context ${tokens(d.contextTokens)}` : '',
-    ].filter(Boolean).join(' · ')
+    const waiting = s.state === 'waiting'
+    const facts = [stateLabel(s), d.model && modelName(d.model), d.contextTokens ? `context ${tokens(d.contextTokens)}` : '']
+      .filter(Boolean).join(' · ')
+    // What it is asking, or else how its last answer began — enough to recognise it.
+    const said = waiting && s.message ? s.message : d.reply
     return {
-      label: `${s.state === 'waiting' ? '$(bell-dot)' : '$(sync~spin)'} ${d.title || s.project}`,
-      description: `${s.state === 'waiting' ? 'waiting for you' : 'running'} ${ago(s.at)} · ${s.project}${movedTo(s)} · ${whereLabel(s)}`,
-      // What it is asking, or else how its last answer began — enough to recognise it.
-      detail: [s.state === 'waiting' && s.message ? s.message : d.reply, facts].filter(Boolean).join(' — '),
+      label: d.title || s.project,
+      iconPath: new vscode.ThemeIcon(waiting ? 'bell-dot' : 'sync~spin'),
+      description: `${placeLabel(s)} · ${whereLabel(s)}`,
+      detail: said ? `${facts} — ${said}` : facts,
       id: s.session,
       root: s.root || s.cwd,
       title: d.title || s.project,
@@ -228,13 +246,14 @@ async function showSessions(context: vscode.ExtensionContext): Promise<void> {
   // Last, not first: the first item is what Enter picks.
   const paused = pauseNote()
   const control: ControlPick = paused
-    ? { label: '$(bell) Resume notifications', description: paused, action: 'resume' }
-    : { label: '$(bell-slash) Pause notifications…', action: 'pause' }
-  const quiet: ControlPick = { label: '$(watch) Announce turns longer than…', description: quietLabel(quietSeconds()), action: 'quiet' }
-  const setup: ControlPick = { label: '$(gear) Set up…', description: 'connect, allow notifications, try it', action: 'setup' }
-  const items: (SessionPick | ControlPick)[] = sessions.length
-    ? [...sessions, { label: '', kind: vscode.QuickPickItemKind.Separator }, control, quiet, setup]
-    : [control, quiet, setup]
+    ? { label: 'Resume notifications', iconPath: new vscode.ThemeIcon('bell'), description: paused, action: 'resume' }
+    : { label: 'Pause notifications…', iconPath: new vscode.ThemeIcon('bell-slash'), action: 'pause' }
+  const quiet: ControlPick = { label: 'Announce turns longer than…', iconPath: new vscode.ThemeIcon('watch'), description: quietLabel(quietSeconds()), action: 'quiet' }
+  const setup: ControlPick = { label: 'Set up…', iconPath: new vscode.ThemeIcon('gear'), description: 'connect, allow notifications, try it', action: 'setup' }
+  const items: (SessionPick | ControlPick)[] = [
+    ...(sessions.length ? [section('sessions'), ...sessions] : []),
+    section('notifications'), control, quiet, setup,
+  ]
   const pick = await vscode.window.showQuickPick(items, {
     // The same mark as in the status bar, so the list is recognisably the one it opens.
     title: '✻ Claude Code sessions',

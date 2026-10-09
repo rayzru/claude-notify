@@ -64,9 +64,9 @@ windows, and lights up while a session waits for you. Click it for the full list
 
 | | |
 | --- | --- |
-| **who** | the session's title, the same one Claude Code shows |
+| **who** | the session's title, the same one Claude Code shows — or the name you gave its tab |
 | **where** | the project it was started in and which window has it — plus where it is working now, if it moved on to another repository |
-| **state** | waiting for you — with what it is asking — or running, and for how long |
+| **state** | waiting for you — with what it is asking — or running, and for how long; running includes background agents and workflows still at work after the turn ended |
 | **size** | model and how much context the session is carrying |
 
 Pick one and its window comes to the front with that session open. A session that no window
@@ -176,9 +176,11 @@ every workspace goes to the window you used last.
 
 The script also keeps one small file per active session under
 `~/.claude/claude-notify/sessions/`, which every window reads for its status bar and list.
-Whether a session is running is read from its transcript: a working session keeps writing
-to it. The title and context size come from the end of that same file when you open the list,
-since they change on every turn. The
+Whether a session is running is what Claude Code itself says: it keeps a file per running
+process under `~/.claude/sessions/`, busy, waiting or idle. For a session it says nothing
+about — an older Claude Code, a process already gone — the transcript decides: a working
+session keeps adding dated records to it. The title and context size come from the end of
+that same file when you open the list, since they change on every turn. The
 extension does that through the Claude Code extension's own command, so VS Code's
 confirmation prompt for external links never appears.
 
@@ -204,10 +206,12 @@ Notifications, with whatever you allowed, so a reinstall does not ask again.
 
 - **Context is shown as a size, not a percentage.** The transcript rarely says how large the
   model's window is, and a guessed percentage would be worse than an honest number.
-- **"Running" means the transcript is being written.** Hooks alone miss sessions that resume
-  after an editor restart without a new prompt, and never hear about one killed mid-turn. A
-  working session always writes its transcript, so that decides: silent for ten minutes, and
-  a session that claimed to be running is taken off the list.
+- **"Running" is Claude Code's word.** Hooks alone miss too much: a turn ends while its
+  background agents keep working, a session resumes after an editor restart without a new
+  prompt, one is killed mid-turn and never says so. Claude Code records which of its
+  processes are busy, and that decides. Without that record — an older Claude Code keeps
+  none — the transcript does: silent for ten minutes, and a session that claimed to be
+  running is taken off the list.
 
 - **The focus command belongs to the Claude Code extension** and is not a documented API.
   If a future release renames it, clicks fall back to a `vscode://` link, which works
